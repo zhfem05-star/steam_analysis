@@ -1,0 +1,237 @@
+# Steam Store API (비공식)
+
+## appreviews - 게임 리뷰 조회
+
+**URL:** `https://store.steampowered.com/appreviews/{appid}`
+
+### 파라미터
+
+| 파라미터 | 타입 | 필수 | 기본값 | 설명 |
+|---------|------|------|--------|------|
+| `json` | int | ✅ | - | 1로 설정 (JSON 응답) |
+| `filter` | string | ❌ | all | recent: 최신순 / updated: 업데이트순 / all: 유용성순 |
+| `language` | string | ❌ | all | 언어 코드 (korean, english, all 등) |
+| `cursor` | string | ❌ | * | 페이지네이션 (첫 페이지는 "*") |
+| `num_per_page` | int | ❌ | 20 | 페이지당 리뷰 수 (최대 100) |
+| `review_type` | string | ❌ | all | all / positive / negative |
+| `purchase_type` | string | ❌ | steam | all / steam / non_steam_purchase |
+| `day_range` | int | ❌ | - | 최근 N일 (최대 365, filter=all 전용) |
+
+### 응답
+
+```json
+{
+  "success": 1,
+  "query_summary": {
+    "num_reviews": 20,
+    "review_score": 9,
+    "review_score_desc": "Very Positive",
+    "total_positive": 1100000,
+    "total_negative": 150000,
+    "total_reviews": 1250000
+  },
+  "cursor": "AoIFP+y24wAAAABzptLQAQ==",
+  "reviews": [
+    {
+      "recommendationid": "123456789",
+      "author": {
+        "steamid": "76561198099490962",
+        "num_games_owned": 523,
+        "num_reviews": 45,
+        "playtime_forever": 61040,
+        "playtime_last_two_weeks": 264,
+        "playtime_at_review": 58000,
+        "last_played": 1738195200
+      },
+      "language": "english",
+      "review": "Great game! Highly recommend.",
+      "timestamp_created": 1735689600,
+      "timestamp_updated": 1735689600,
+      "voted_up": true,
+      "votes_up": 125,
+      "votes_funny": 3,
+      "comment_count": 8,
+      "steam_purchase": true,
+      "received_for_free": false,
+      "written_during_early_access": false
+    }
+  ]
+}
+```
+
+**query_summary 필드:**
+
+| 필드 | 설명 |
+|------|------|
+| `num_reviews` | 현재 응답의 리뷰 개수 |
+| `review_score` | 리뷰 점수 (0-10) |
+| `review_score_desc` | 점수 설명 (Very Positive 등) |
+| `total_positive` | 전체 긍정 리뷰 수 |
+| `total_negative` | 전체 부정 리뷰 수 |
+| `total_reviews` | 전체 리뷰 수 |
+
+**reviews 필드:**
+
+| 필드 | 설명 |
+|------|------|
+| `voted_up` | true: 추천, false: 비추천 |
+| `playtime_forever` | 총 플레이 타임 (분) |
+| `playtime_at_review` | 리뷰 작성 시점 플레이 타임 (분) |
+| `steam_purchase` | Steam 구매 여부 |
+
+### Rate Limit
+
+- **5분당 제한:** 200 requests
+- **권장 간격:** 1.5초
+- **초과 시:** 429 Too Many Requests
+
+### 활용 예시
+
+```python
+import requests
+import time
+from urllib.parse import quote
+
+def get_reviews(appid, num_reviews=100):
+    """게임 리뷰 수집"""
+    url = f"https://store.steampowered.com/appreviews/{appid}"
+    
+    reviews = []
+    cursor = "*"
+    
+    while len(reviews) < num_reviews:
+        params = {
+            'json': 1,
+            'filter': 'recent',
+            'language': 'all',
+            'num_per_page': 100,
+            'cursor': cursor,
+            'purchase_type': 'all'
+        }
+        
+        response = requests.get(url, params=params)
+        data = response.json()
+        
+        if data['success'] != 1:
+            break
+        
+        batch = data.get('reviews', [])
+        if not batch:
+            break
+        
+        reviews.extend(batch)
+        cursor = data.get('cursor')
+        
+        time.sleep(1.5)
+    
+    return reviews[:num_reviews]
+
+# 예시 1: 최근 리뷰 100개 수집
+reviews = get_reviews(730, num_reviews=100)
+print(f"수집된 리뷰: {len(reviews)}개")
+
+# 예시 2: 리뷰 통계만 조회
+def get_review_stats(appid):
+    """리뷰 통계 조회"""
+    url = f"https://store.steampowered.com/appreviews/{appid}"
+    
+    params = {
+        'json': 1,
+        'filter': 'all',
+        'num_per_page': 0  # 통계만 필요
+    }
+    
+    response = requests.get(url, params=params)
+    data = response.json()
+    
+    if data['success'] == 1:
+        summary = data['query_summary']
+        return {
+            'total_reviews': summary['total_reviews'],
+            'positive': summary['total_positive'],
+            'negative': summary['total_negative'],
+            'score': summary['review_score_desc']
+        }
+    return None
+
+stats = get_review_stats(730)
+print(f"CS2 리뷰: {stats['total_reviews']:,}개")
+print(f"평가: {stats['score']}")
+
+# 예시 3: 할인 전후 리뷰 증가 추적
+def track_review_growth(appid, days=7):
+    """리뷰 증가 추적"""
+    from datetime import datetime, timedelta
+    
+    # 현재 리뷰 통계
+    current_stats = get_review_stats(appid)
+    current_total = current_stats['total_reviews']
+    
+    print(f"현재 리뷰 수: {current_total:,}개")
+    
+    # 일주일 전 리뷰는 데이터베이스에서 조회
+    # 또는 정기적으로 저장해둔 데이터 사용
+    previous_total = 10000  # 예시
+    
+    new_reviews = current_total - previous_total
+    growth_rate = (new_reviews / previous_total) * 100
+    
+    return {
+        'previous': previous_total,
+        'current': current_total,
+        'new_reviews': new_reviews,
+        'growth_rate': growth_rate
+    }
+
+# 예시 4: 긍정/부정 비율 분석
+def analyze_sentiment(appid, sample_size=1000):
+    """감정 분석 (최근 리뷰 기준)"""
+    reviews = get_reviews(appid, num_reviews=sample_size)
+    
+    positive = sum(1 for r in reviews if r['voted_up'])
+    negative = len(reviews) - positive
+    
+    return {
+        'total': len(reviews),
+        'positive': positive,
+        'negative': negative,
+        'positive_rate': positive / len(reviews) * 100,
+        'avg_playtime': sum(r['author']['playtime_at_review'] for r in reviews) / len(reviews) / 60  # 시간
+    }
+
+sentiment = analyze_sentiment(730)
+print(f"최근 {sentiment['total']}개 리뷰 분석:")
+print(f"긍정: {sentiment['positive_rate']:.1f}%")
+print(f"평균 플레이타임: {sentiment['avg_playtime']:.1f}시간")
+
+# 예시 5: 언어별 리뷰 수집
+def get_reviews_by_language(appid, language='korean', num=50):
+    """특정 언어 리뷰만 수집"""
+    url = f"https://store.steampowered.com/appreviews/{appid}"
+    
+    params = {
+        'json': 1,
+        'filter': 'recent',
+        'language': language,
+        'num_per_page': 100,
+        'cursor': '*'
+    }
+    
+    response = requests.get(url, params=params)
+    data = response.json()
+    
+    if data['success'] == 1:
+        return data.get('reviews', [])[:num]
+    return []
+
+korean_reviews = get_reviews_by_language(730, 'korean', 50)
+print(f"한국어 리뷰: {len(korean_reviews)}개")
+```
+
+### 주의사항
+
+- **cursor는 URL 인코딩 필요** - 특수문자 포함 (자동 처리됨)
+- **num_per_page 최대 100** - 더 많은 리뷰는 cursor로 페이지네이션
+- **filter=all은 cursor 무한반복 가능** - recent나 updated 사용 권장
+- **Rate Limit 엄격** - 1.5초 간격 필수
+- **플레이타임은 분 단위** - 60으로 나눠야 시간

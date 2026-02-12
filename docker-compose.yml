@@ -1,0 +1,178 @@
+version: '3.8'
+
+# ============================================================
+# Steam 게임 분석 프로젝트 - 로컬 개발 환경
+# ============================================================
+# 구성: Airflow + PostgreSQL(메타DB & 분석DB) + MinIO(S3 대체)
+# 실행: docker-compose up -d
+# ============================================================
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.8.1-python3.11
+  environment: &airflow-common-env
+    # Airflow 기본 설정
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__FERNET_KEY: 'ZmRkNjQ2OTBkZjBkNGI2NDg0MjU0NjY2ZjU2NzYwZGY='
+
+    # Airflow 메타DB (PostgreSQL)
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+
+    # MinIO 연결 (S3 대체)
+    # Airflow의 Amazon Provider에서 이 Connection을 사용
+    AIRFLOW__CONN__MINIO_S3: >-
+      aws://minioadmin:minioadmin@?endpoint_url=http://minio:9000
+
+    # 분석용 PostgreSQL 연결 (나중에 Snowflake로 교체)
+    AIRFLOW__CONN__ANALYTICS_DB: postgresql+psycopg2://analytics:analytics@analytics-postgres:5432/steam_analytics
+
+    # Steam API Key (실행 시 .env 파일에서 로드)
+    STEAM_API_KEY: ${STEAM_API_KEY}
+
+  volumes:
+    - ./dags:/opt/airflow/dags           # DAG 파일들
+    - ./plugins:/opt/airflow/plugins     # 커스텀 플러그인
+    - ./scripts:/opt/airflow/scripts     # 유틸리티 스크립트
+    - ./logs:/opt/airflow/logs           # 로그
+  depends_on:
+    airflow-postgres:
+      condition: service_healthy
+    analytics-postgres:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+
+services:
+  # ============================================================
+  # 1. Airflow 메타 데이터베이스
+  # ============================================================
+  airflow-postgres:
+    image: postgres:15-alpine
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_pg_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+
+  # ============================================================
+  # 2. 분석용 데이터베이스 (로컬에서 Snowflake 대체)
+  # ============================================================
+  analytics-postgres:
+    image: postgres:15-alpine
+    container_name: analytics-postgres
+    environment:
+      POSTGRES_USER: analytics
+      POSTGRES_PASSWORD: analytics
+      POSTGRES_DB: steam_analytics
+    volumes:
+      - analytics_pg_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d  # 초기 테이블 생성
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "analytics"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+
+  # ============================================================
+  # 3. MinIO (로컬 S3 대체)
+  # ============================================================
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO 웹 콘솔
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+
+  # MinIO 초기 버킷 생성
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb local/steam-raw --ignore-existing;
+      mc mb local/steam-processed --ignore-existing;
+      echo 'MinIO 버킷 생성 완료: steam-raw, steam-processed';
+      "
+
+  # ============================================================
+  # 4. Airflow 초기화 (최초 1회만 실행)
+  # ============================================================
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db init
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com
+        echo "Airflow 초기화 완료!"
+    restart: "no"
+
+  # ============================================================
+  # 5. Airflow Webserver
+  # ============================================================
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"   # Airflow UI
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ============================================================
+  # 6. Airflow Scheduler
+  # ============================================================
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $(hostname)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  airflow_pg_data:
+  analytics_pg_data:
+  minio_data:

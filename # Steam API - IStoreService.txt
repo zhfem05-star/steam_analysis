@@ -1,0 +1,93 @@
+# Steam API - IStoreService
+
+## GetAppList
+
+**URL:** `https://api.steampowered.com/IStoreService/GetAppList/v1/`
+
+### 파라미터
+
+| 파라미터 | 타입 | 필수 | 기본값 | 설명 |
+|---------|------|------|--------|------|
+| `key` | string | ✅ | - | Steam Web API 키 |
+| `max_results` | int | ❌ | 10000 | 최대 반환 개수 (최대: 50000) |
+| `last_appid` | int | ❌ | 0 | 페이지네이션용 |
+| `include_games` | bool | ❌ | true | 게임 포함 |
+| `include_dlc` | bool | ❌ | false | DLC 포함 |
+| `include_software` | bool | ❌ | false | 소프트웨어 포함 |
+
+### 응답
+
+```json
+{
+  "response": {
+    "apps": [
+      {
+        "appid": 730,
+        "name": "Counter-Strike 2",
+        "last_modified": 1735689600,
+        "price_change_number": 33078735
+      }
+    ],
+    "have_more_results": true,
+    "last_appid": 730
+  }
+}
+```
+
+| 필드 | 설명 |
+|------|------|
+| `appid` | 앱 고유 ID |
+| `name` | 앱 이름 |
+| `last_modified` | 마지막 수정 시간 (Unix timestamp) |
+| `price_change_number` | 가격 변경 버전 번호 |
+
+### Rate Limit
+
+- **일일 제한:** 100,000 requests
+- **권장 간격:** 1.5초
+- **초과 시:** 403 Forbidden
+
+### 활용 예시
+
+```python
+import requests
+import time
+
+def get_steam_apps(api_key):
+    url = "https://api.steampowered.com/IStoreService/GetAppList/v1/"
+    all_apps = []
+    last_appid = 0
+    
+    while True:
+        params = {
+            'key': api_key,
+            'max_results': 50000,
+            'last_appid': last_appid
+        }
+        
+        response = requests.get(url, params=params)
+        data = response.json()['response']
+        
+        all_apps.extend(data.get('apps', []))
+        
+        if not data.get('have_more_results'):
+            break
+            
+        last_appid = data['last_appid']
+        time.sleep(1.5)
+    
+    return all_apps
+```
+
+---
+
+## GetRecommendedTagsForUser
+
+**URL:** `https://api.steampowered.com/IStoreService/GetRecommendedTagsForUser/v1/`
+
+### 파라미터
+
+| 파라미터 | 타입 | 필수 | 설명 |
+|---------|------|------|------|
+| `key` | string | ✅ | API 키 |
+| `steamid` | uint64 | ❌ | 사용자 SteamID |

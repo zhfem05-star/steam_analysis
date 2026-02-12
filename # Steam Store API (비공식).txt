@@ -1,0 +1,167 @@
+# Steam Store API (비공식)
+
+## appdetails - 게임 상세 정보 조회
+
+**URL:** `https://store.steampowered.com/api/appdetails`
+
+### 파라미터
+
+| 파라미터 | 타입 | 필수 | 기본값 | 설명 |
+|---------|------|------|--------|------|
+| `appids` | string | ✅ | - | 조회할 AppID (쉼표로 구분, 최대 100개) |
+| `cc` | string | ❌ | us | 국가 코드 (kr, us, jp 등) |
+| `l` | string | ❌ | english | 언어 (korean, english 등) |
+| `filters` | string | ❌ | - | 특정 필드만 조회 (basic, price_overview) |
+
+### 응답
+
+```json
+{
+  "730": {
+    "success": true,
+    "data": {
+      "type": "game",
+      "name": "Counter-Strike 2",
+      "steam_appid": 730,
+      "is_free": false,
+      "price_overview": {
+        "currency": "KRW",
+        "initial": 0,
+        "final": 0,
+        "discount_percent": 0,
+        "initial_formatted": "",
+        "final_formatted": "Free"
+      },
+      "header_image": "https://...",
+      "developers": ["Valve"],
+      "publishers": ["Valve"]
+    }
+  }
+}
+```
+
+**주요 필드:**
+
+| 필드 | 설명 |
+|------|------|
+| `success` | 조회 성공 여부 |
+| `is_free` | 무료 게임 여부 |
+| `price_overview` | 가격 정보 (F2P는 없음) |
+| `initial` | 원가 (센트 단위) |
+| `final` | 최종 가격 (센트 단위) |
+| `discount_percent` | 할인율 (%) |
+
+### Rate Limit
+
+- **5분당 제한:** 200 requests
+- **권장 간격:** 1.5초
+- **초과 시:** 429 Too Many Requests
+
+### 활용 예시
+
+```python
+import requests
+import time
+
+def get_game_details(appid, country='kr', language='korean'):
+    """게임 상세 정보 조회"""
+    url = "https://store.steampowered.com/api/appdetails"
+    
+    params = {
+        'appids': appid,
+        'cc': country,
+        'l': language
+    }
+    
+    response = requests.get(url, params=params)
+    data = response.json()
+    
+    if data[str(appid)]['success']:
+        return data[str(appid)]['data']
+    return None
+
+# 예시 1: 기본 정보
+game = get_game_details(730)
+print(f"게임명: {game['name']}")
+print(f"무료 게임: {game['is_free']}")
+
+# 예시 2: 가격 및 할인 정보
+def check_discount(appid):
+    """할인 여부 확인"""
+    game = get_game_details(appid)
+    
+    if not game:
+        return None
+    
+    # 무료 게임 체크
+    if game.get('is_free') or 'price_overview' not in game:
+        return {'name': game['name'], 'is_free': True}
+    
+    price = game['price_overview']
+    
+    return {
+        'name': game['name'],
+        'currency': price['currency'],
+        'original_price': price['initial'] / 100,
+        'current_price': price['final'] / 100,
+        'discount': price['discount_percent'],
+        'is_on_sale': price['discount_percent'] > 0
+    }
+
+# 예시 3: 여러 게임 조회 (최대 100개)
+def get_multiple_games(appids):
+    """여러 게임 정보 한번에 조회"""
+    url = "https://store.steampowered.com/api/appdetails"
+    
+    # 쉼표로 구분
+    params = {
+        'appids': ','.join(map(str, appids)),
+        'cc': 'kr',
+        'l': 'korean'
+    }
+    
+    response = requests.get(url, params=params)
+    return response.json()
+
+# 인기 게임들
+games = get_multiple_games([730, 570, 440])
+
+for appid, info in games.items():
+    if info['success']:
+        print(f"{info['data']['name']}")
+    time.sleep(1.5)
+
+# 예시 4: 할인 감지 시스템
+def monitor_sales(appids):
+    """게임 할인 모니터링"""
+    results = []
+    
+    for appid in appids:
+        info = check_discount(appid)
+        
+        if info and info.get('is_on_sale'):
+            results.append({
+                'name': info['name'],
+                'discount': info['discount'],
+                'price': info['current_price']
+            })
+        
+        time.sleep(1.5)  # Rate Limit 대응
+    
+    return results
+
+# 모니터링 대상
+watch_list = [730, 570, 440, 570940]
+on_sale = monitor_sales(watch_list)
+
+for game in on_sale:
+    print(f"🔥 {game['name']}: {game['discount']}% 할인!")
+```
+
+### 주의사항
+
+- **가격은 센트 단위** - 100으로 나눠야 실제 가격
+- **무료 게임은 price_overview 없음** - is_free로 확인
+- **Rate Limit 엄격** - 1.5초 간격 필수
+- **비공식 API** - 예고 없이 변경 가능
+- **여러 게임 조회 시** - 쉼표로 구분, 최대 100개

@@ -1,0 +1,9 @@
+# 환경변수 (API키 포함)
+.env
+
+# Airflow 로그
+logs/
+
+# Python
+__pycache__/
+*.pyc
