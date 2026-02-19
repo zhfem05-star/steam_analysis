@@ -1,0 +1,428 @@
+# Steam API - IStoreQueryService
+
+## Query
+
+Steam 스토어의 게임/소프트웨어/DLC 등을 다양한 조건으로 검색하고 필터링할 수 있는 범용 쿼리 API.
+할인 중인 게임 목록, 태그별 게임 검색, 인기 판매 게임 조회 등 스토어 탐색에 필요한 대부분의 기능을 이 하나의 엔드포인트로 처리할 수 있다.
+
+**URL:** `https://api.steampowered.com/IStoreQueryService/Query/v1/`
+
+**HTTP Method:** `GET`
+
+**인터페이스 타입:** Service (이름이 `Service`로 끝나므로 `input_json`으로 파라미터 전달 가능)
+
+---
+
+## 간단한 사용 방법
+
+### 기본 호출 구조
+
+이 API는 Service 인터페이스이므로 `input_json` 파라미터에 JSON을 넣어서 호출한다.
+
+```
+GET https://api.steampowered.com/IStoreQueryService/Query/v1/
+    ?key=YOUR_API_KEY
+    &input_json={"query":{"start":0,"count":50,"filters":{...}},"context":{...},"data_request":{...}}
+```
+
+### 주요 사용 시나리오
+
+**1. 할인 중인 게임 목록 조회**
+
+```python
+import requests
+import json
+
+def get_discounted_games(api_key, min_discount=1, start=0, count=50):
+    """할인 중인 게임 목록 조회"""
+    url = "https://api.steampowered.com/IStoreQueryService/Query/v1/"
+
+    input_data = {
+        "query": {
+            "start": start,
+            "count": count,
+            "filters": {
+                "type_filters": {
+                    "include_games": True
+                },
+                "price_filters": {
+                    "min_discount_percent": min_discount
+                }
+            }
+        },
+        "context": {
+            "language": "korean",
+            "country_code": "KR"
+        },
+        "data_request": {
+            "include_basic_info": True,
+            "include_all_purchase_options": True
+        }
+    }
+
+    params = {
+        'key': api_key,
+        'input_json': json.dumps(input_data)
+    }
+
+    response = requests.get(url, params=params)
+    return response.json()
+```
+
+**2. 특정 태그의 게임만 검색 (예: 인디 게임)**
+
+```python
+input_data = {
+    "query": {
+        "start": 0,
+        "count": 50,
+        "filters": {
+            "type_filters": {"include_games": True},
+            "tagids_must_match": [{"tagids": [492]}]  # 492 = Indie 태그
+        }
+    },
+    "context": {"language": "korean", "country_code": "KR"},
+    "data_request": {"include_basic_info": True}
+}
+```
+
+**3. 할인 게임 전체 수집 (페이지네이션)**
+
+```python
+import time
+
+def get_all_discounted_games(api_key):
+    """할인 중인 게임 전체 목록을 페이지네이션으로 수집"""
+    all_games = []
+    start = 0
+    count = 100
+
+    while True:
+        data = get_discounted_games(api_key, min_discount=1, start=start, count=count)
+        items = data.get('response', {}).get('ids', [])
+
+        if not items:
+            break
+
+        all_games.extend(items)
+        start += count
+        time.sleep(1.5)  # Rate Limit 준수
+
+    return all_games
+```
+
+---
+
+## 요청 파라미터
+
+### 최상위 파라미터
+
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `key` | string | ✅ | Steam Web API 키 |
+| `query_name` | string | ❌ | 쿼리 이름 (로깅/메트릭용, 실행 결과에 영향 없음) |
+| `query` | CStoreQueryParams | ❌ | **핵심 쿼리 파라미터** (검색 조건, 필터, 정렬, 페이지네이션) |
+| `context` | StoreBrowseContext | ❌ | 언어/국가 설정 |
+| `data_request` | StoreBrowseItemDataRequest | ❌ | 응답에 포함할 추가 데이터 지정 |
+| `override_country_code` | string | ❌ | 다른 국가의 데이터를 가져올 때 사용하는 2자리 국가 코드 |
+
+---
+
+### `query` (CStoreQueryParams) — 쿼리 본체
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `start` | int32 | 페이지네이션 시작 위치 (0부터 시작) |
+| `count` | int32 | 반환할 항목 수 |
+| `sort` | int32 (enum) | 정렬 기준
+RELEVANCE = 0       # 기본 정렬 (관련성)
+NAME_ASC = 1        # 이름순 (가나다/ABC)
+RELEASE_ASC = 2     # 출시일 오래된 순
+POPULARITY = 10     # 인기순
+TRENDING = 11       # 트렌딩
+TOP_SELLERS = 12    # 베스트셀러
+RECENT_POPULAR = 13 # 최근 인기 |
+| `filters` | CStoreQueryFilters | 검색 필터 (아래 상세 설명) |
+
+---
+
+### `query.filters` (CStoreQueryFilters) — 검색 필터
+
+### 기본 필터
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `released_only` | bool | 출시된 게임만 포함 |
+| `coming_soon_only` | bool | 출시 예정 게임만 포함 |
+
+### 타입 필터 (`type_filters`)
+
+어떤 종류의 아이템을 검색할지 지정한다.
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `include_apps` | bool | 앱 포함 |
+| `include_packages` | bool | 패키지 포함 |
+| `include_bundles` | bool | 번들 포함 |
+| `include_games` | bool | **게임** 포함 |
+| `include_demos` | bool | 데모 포함 |
+| `include_mods` | bool | 모드 포함 |
+| `include_dlc` | bool | DLC 포함 |
+| `include_software` | bool | 소프트웨어 포함 |
+| `include_video` | bool | 비디오 포함 |
+| `include_hardware` | bool | 하드웨어 포함 |
+| `include_series` | bool | 시리즈 포함 |
+| `include_music` | bool | 음악 포함 |
+| `dlc_for_appid` | uint32 | 특정 게임의 DLC만 조회할 때 해당 게임의 appid |
+
+### 사전 정의 필터 (`predefined_filter`)
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `filter_type` | int32 (enum) | Steam이 미리 정의한 필터 타입 |
+
+### 태그 필터
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `tagids_must_match[0].tagids[0]` | int32[] | 반드시 포함해야 할 태그 ID 목록 |
+| `tagids_exclude[0]` | int32[] | 제외할 태그 ID 목록 |
+
+### 가격/할인 필터 (`price_filters`) ⭐
+
+할인 게임을 조회할 때 핵심이 되는 필터.
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `only_free_items` | bool | 무료 게임만 |
+| `exclude_free_items` | bool | 무료 게임 제외 |
+| `min_discount_percent` | int32 | **최소 할인율 (%)** — `1` 이상 설정 시 할인 중인 게임만 반환 |
+
+### 판매 순위 필터
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `regional_top_n_sellers` | int32 | 지역별 상위 N개 베스트셀러 |
+| `global_top_n_sellers` | int32 | 글로벌 상위 N개 베스트셀러 |
+| `regional_long_term_top_n_sellers` | int32 | 지역별 장기 상위 N개 베스트셀러 |
+| `global_long_term_top_n_sellers` | int32 | 글로벌 장기 상위 N개 베스트셀러 |
+
+### 콘텐츠 디스크립터 필터
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `content_descriptors_must_match[0]` | int32[] (enum) | 반드시 포함할 콘텐츠 설명자 |
+| `content_descriptors_excluded[0]` | int32[] (enum) | 제외할 콘텐츠 설명자 |
+
+### 기타 필터
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `exclude_from[0]` | int32[] (enum) | 제외 조건 |
+| `language_preferences[0]` | int32[] | 언어 선호도 |
+| `parent_appids[0]` | uint32[] | 부모 앱 ID |
+
+---
+
+### `query.filters.store_page_filter` (CStorePageFilter) — 스토어 페이지 필터
+
+### 세일 필터 (`sale_filter`)
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `sale_tagid` | uint32 | 세일 이벤트 태그 ID |
+| `creator_clan_account_id` | uint32 | 크리에이터 클랜 계정 ID |
+
+### 콘텐츠 허브 필터 (`content_hub_filter`)
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `hub_type` | string | 허브 유형 |
+| `hub_category` | string | 허브 카테고리 |
+| `hub_tagid` | uint32 | 허브 태그 ID |
+| `discount_filter` | EContentHubDiscountFilterType | **할인 필터 타입** (아래 참고) |
+
+**`discount_filter` enum 값:**
+
+| 값 | 이름 | 설명 |
+| --- | --- | --- |
+| `0` | None | 필터 없음 |
+| `1` | DiscountsOnly | **할인 중인 게임만** 반환 |
+| `2` | PrioritizeDiscounts | 할인 게임을 우선 정렬 (비할인 게임도 포함) |
+
+### Opt-in 필터 (`optin`)
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `name` | string | Opt-in 이름 |
+| `optin_tagid` | uint32 | Opt-in 태그 ID |
+| `prune_tagid` | uint32 | 제거할 태그 ID |
+| `optin_only` | bool | Opt-in된 항목만 |
+
+### 스토어 필터 (`store_filters[0]`)
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `filter_json` | string | 필터 조건을 JSON 문자열로 전달 |
+| `cache_key` | string | 캐시 키 |
+
+---
+
+### `context` (StoreBrowseContext) — 언어/국가 설정
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `language` | string | 언어 코드 (예: `"korean"`, `"english"`) |
+| `elanguage` | int32 | 언어 enum 값 (예: 한국어 = 16) |
+| `country_code` | string | 국가 코드 (예: `"KR"`, `"US"`) |
+
+---
+
+### `data_request` (StoreBrowseItemDataRequest) — 응답 데이터 옵션
+
+이 파라미터를 설정하면 응답에 게임의 상세 정보가 포함된다. **설정하지 않으면 appid 목록만 반환된다.**
+
+| 파라미터 | 타입 | 설명 |
+| --- | --- | --- |
+| `include_assets` | bool | 이미지 에셋 포함 |
+| `include_release` | bool | 출시일 정보 포함 |
+| `include_platforms` | bool | 지원 플랫폼 (Windows/Mac/Linux) 포함 |
+| `include_all_purchase_options` | bool | **모든 구매 옵션 포함 (가격, 할인 정보)** |
+| `include_screenshots` | bool | 스크린샷 포함 |
+| `include_trailers` | bool | 트레일러 포함 |
+| `include_ratings` | bool | 등급 정보 포함 |
+| `include_tag_count` | int32 | 포함할 태그 개수 |
+| `include_reviews` | bool | 리뷰 정보 포함 |
+| `include_basic_info` | bool | **기본 정보 (이름, 설명 등) 포함** |
+| `include_supported_languages` | bool | 지원 언어 목록 포함 |
+| `include_full_description` | bool | 전체 설명 포함 |
+| `include_included_items` | bool | 포함된 아이템 정보 |
+| `included_item_data_request` | StoreBrowseItemDataRequest | 포함된 아이템의 데이터 요청 |
+| `include_assets_without_overrides` | bool | 오버라이드 없는 에셋 포함 |
+| `apply_user_filters` | bool | 사용자 필터 적용 |
+| `include_links` | bool | 링크 정보 포함 |
+
+---
+
+## 응답
+
+### 기본 응답 (data_request 미설정 시)
+
+`data_request`를 설정하지 않으면 appid 목록만 반환된다.
+
+```json
+{
+  "response": {
+    "ids": [
+      {"appid": 730},
+      {"appid": 570},
+      {"appid": 292030}
+    ],
+    "total": 5000,
+    "start": 0,
+    "count": 50
+  }
+}
+```
+
+### 상세 응답 (data_request 설정 시)
+
+`include_basic_info: true`, `include_all_purchase_options: true` 설정 시, 게임 이름과 가격/할인 정보가 포함된다.
+
+```json
+{
+  "response": {
+    "ids": [...],
+    "store_items": [
+      {
+        "item_type": 0,
+        "id": 292030,
+        "appid": 292030,
+        "name": "The Witcher 3: Wild Hunt",
+        "basic_info": {
+          "short_description": "...",
+          "publishers": [{"name": "CD PROJEKT RED"}],
+          "developers": [{"name": "CD PROJEKT RED"}]
+        },
+        "best_purchase_option": {
+          "packageid": 68476,
+          "purchase_option_name": "The Witcher 3: Wild Hunt",
+          "original_price_in_cents": "2900",
+          "final_price_in_cents": "1450",
+          "formatted_final_price": "₩14,500",
+          "formatted_original_price": "₩29,000",
+          "discount_pct": 50,
+          "active_discounts": [
+            {
+              "discount_amount": "1450",
+              "discount_description": "...",
+              "discount_end_date": 1735689600
+            }
+          ]
+        }
+      }
+    ],
+    "total": 5000,
+    "start": 0,
+    "count": 50
+  }
+}
+```
+
+### 주요 응답 필드 설명
+
+| 필드 | 설명 |
+| --- | --- |
+| `ids` | 검색 결과 appid 목록 |
+| `store_items` | 상세 정보가 포함된 게임 목록 (`data_request` 설정 시) |
+| `total` | 검색 조건에 맞는 전체 결과 수 |
+| `start` | 현재 페이지 시작 위치 |
+| `count` | 현재 반환된 항목 수 |
+
+### 할인 관련 주요 응답 필드
+
+| 필드 | 설명 |
+| --- | --- |
+| `best_purchase_option.original_price_in_cents` | 원가 (센트 단위) |
+| `best_purchase_option.final_price_in_cents` | 할인된 최종가 (센트 단위) |
+| `best_purchase_option.formatted_final_price` | 포맷된 할인가 (예: `"₩14,500"`) |
+| `best_purchase_option.formatted_original_price` | 포맷된 원가 (예: `"₩29,000"`) |
+| `best_purchase_option.discount_pct` | 할인율 (%) |
+| `best_purchase_option.active_discounts[].discount_end_date` | 할인 종료 시간 (Unix timestamp) |
+
+---
+
+## 할인 필터링 방법 비교
+
+이 API에는 할인을 필터링하는 방법이 2가지 있다.
+
+| 방법 | 위치 | 설명 |
+| --- | --- | --- |
+| `min_discount_percent` | `query.filters.price_filters` | 최소 할인율(%)을 직접 지정. `1`이면 1% 이상 할인 중인 게임만 반환 |
+| `discount_filter` | `query.filters.store_page_filter.content_hub_filter` | enum 방식. `1 = DiscountsOnly`, `2 = PrioritizeDiscounts` |
+
+> **💡 용도별 추천:**
+> 
+> - 단순히 "할인 중인 게임 목록"이 필요하면 → `min_discount_percent: 1`
+> - "50% 이상 대폭 할인"만 필요하면 → `min_discount_percent: 50`
+> - 할인 게임 우선 + 비할인도 포함하고 싶으면 → `discount_filter: 2`
+
+---
+
+## Rate Limit
+
+Steam Web API 일반 제한 적용으로 추정된다.
+
+- 일일 제한: 100,000 requests
+- 권장 간격: 1.5초
+- 초과 시: 403 Forbidden
+
+---
+
+## 참고사항
+
+- `data_request`를 설정하지 않으면 appid만 반환되므로, 게임 이름이나 가격 정보가 필요하면 반드시 `data_request`를 설정해야 한다.
+- `count`를 설정하지 않으면 서버 기본값만큼만 반환된다 (전체 반환 아님). 할인 게임 전체를 가져오려면 `start`/`count`로 페이지네이션을 돌려야 한다.
+- `context.country_code`에 따라 가격과 할인 정보가 달라진다. 한국 가격이 필요하면 `"KR"`을 설정한다.
+- 가격은 **센트 단위**(원화면 원 단위)로 반환된다. 예: `"2900"` = ₩2,900
+- 이 API는 Service 인터페이스이므로, 중첩 파라미터를 `input_json`에 JSON 형태로 넣어서 전달해야 한다.

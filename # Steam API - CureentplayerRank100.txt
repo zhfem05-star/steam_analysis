@@ -1,0 +1,140 @@
+# GetGamesByConcurrentPlayers
+
+동시 접속자 수 기준으로 게임 순위를 반환하는 API. Steam에서 현재 가장 많이 플레이되고 있는 게임 목록을 가져올 때 사용한다.
+
+**URL:** `https://api.steampowered.com/ISteamChartsService/GetGamesByConcurrentPlayers/v1/`
+
+---
+
+### 파라미터
+
+| 파라미터 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `key` | string | ✅ | Steam Web API 키 |
+| `context` | StoreBrowseContext | ❌ | 스토어 탐색 컨텍스트 (하위 필드 포함) |
+| ↳ `language` | string | ❌ | 언어 코드 (예: `"korean"`, `"english"`) |
+| ↳ `elanguage` | int32 | ❌ | 언어 enum 값 (예: 한국어 = 16) |
+| ↳ `country_code` | string | ❌ | 국가 코드 (예: `"KR"`, `"US"`) |
+| `data_request` | StoreBrowseItemDataRequest | ❌ | 응답에 포함할 추가 데이터 요청 (하위 필드 포함) |
+| ↳ `include_assets` | bool | ❌ | 에셋(이미지 등) 포함 여부 |
+| ↳ `include_release` | bool | ❌ | 출시일 정보 포함 여부 |
+| ↳ `include_platforms` | bool | ❌ | 지원 플랫폼 정보 포함 여부 |
+| ↳ `include_all_purchase_options` | bool | ❌ | 모든 구매 옵션 포함 여부 |
+| ↳ `include_screenshots` | bool | ❌ | 스크린샷 포함 여부 |
+| ↳ `include_trailers` | bool | ❌ | 트레일러 포함 여부 |
+| ↳ `include_ratings` | bool | ❌ | 등급 정보 포함 여부 |
+| ↳ `include_tag_count` | int32 | ❌ | 포함할 태그 개수 |
+| ↳ `include_reviews` | bool | ❌ | 리뷰 정보 포함 여부 |
+| ↳ `include_basic_info` | bool | ❌ | 기본 정보(이름 등) 포함 여부 |
+| ↳ `include_supported_languages` | bool | ❌ | 지원 언어 목록 포함 여부 |
+| ↳ `include_full_description` | bool | ❌ | 전체 설명 포함 여부 |
+| ↳ `include_included_items` | bool | ❌ | 포함된 아이템 정보 여부 |
+| ↳ `included_item_data_request` | StoreBrowseItemDataRequest | ❌ | 포함된 아이템의 데이터 요청 |
+| ↳ `include_assets_without_overrides` | bool | ❌ | 오버라이드 없는 에셋 포함 여부 |
+| ↳ `apply_user_filters` | bool | ❌ | 사용자 필터 적용 여부 |
+| ↳ `include_links` | bool | ❌ | 링크 정보 포함 여부 |
+
+> **💡 참고:** `context`와 `data_request`는 중첩 객체(nested object)이다.
+`input_json` 파라미터로 JSON 형태로 전달하거나, 쿼리스트링에서 `context[language]=korean` 같은 형식으로 전달할 수 있다.
+이건 Steam의 "Service" 인터페이스 특징인데, 이름 끝이 `Service`로 끝나는 인터페이스는 `input_json`으로 파라미터를 한꺼번에 JSON으로 넘길 수 있다.
+> 
+
+---
+
+### 응답
+
+```json
+{
+  "response": {
+    "last_update": 1771060830,
+    "ranks": [
+      {
+        "rank": 1,
+        "appid": 730,
+        "concurrent_in_game": 923304,
+        "peak_in_game": 1493609
+      },
+      {
+        "rank": 2,
+        "appid": 570,
+        "concurrent_in_game": 576650,
+        "peak_in_game": 787541
+      }
+    ]
+  }
+}
+```
+
+### 필드 설명
+
+| 필드 | 설명 |
+| --- | --- |
+| `last_update` | 데이터가 마지막으로 갱신된 시간 (Unix timestamp) |
+| `ranks` | 동시 접속자 순위 배열 |
+| `rank` | 순위 (1부터 시작) |
+| `appid` | 게임 고유 App ID |
+| `concurrent_in_game` | 현재 동시 접속자 수 (조회 시점 기준) |
+| `peak_in_game` | 최근 24시간 내 최고 동시 접속자 수 |
+
+---
+
+### Rate Limit
+
+IStoreService와 동일한 Steam Web API 일반 제한 적용으로 추정된다.
+
+- 일일 제한: 100,000 requests
+- 권장 간격: 1.5초
+- 초과 시: 403 Forbidden
+
+---
+
+### 활용 예시
+
+```python
+import requests
+
+def get_top_games_by_concurrent(api_key):
+    """동시 접속자 수 기준 상위 게임 목록 조회"""
+    url = "https://api.steampowered.com/ISteamChartsService/GetGamesByConcurrentPlayers/v1/"
+
+    params = {
+        'key': api_key,
+        # input_json으로 중첩 파라미터 전달
+        'input_json': '{"data_request":{"include_basic_info":true}}'
+    }
+
+    response = requests.get(url, params=params)
+    data = response.json()['response']
+
+    print(f"마지막 업데이트: {data['last_update']}")
+
+    for game in data['ranks']:
+        print(
+            f"#{game['rank']} | AppID: {game['appid']} | "
+            f"현재: {game['concurrent_in_game']:,}명 | "
+            f"피크: {game['peak_in_game']:,}명"
+        )
+
+    return data
+
+# 사용
+games = get_top_games_by_concurrent("YOUR_API_KEY")
+```
+
+**출력 예시:**
+
+```
+마지막 업데이트: 1771060830
+#1 | AppID: 730 | 현재: 923,304명 | 피크: 1,493,609명
+#2 | AppID: 570 | 현재: 576,650명 | 피크: 787,541명
+#3 | AppID: 578080 | 현재: 294,150명 | 피크: 535,513명
+...
+```
+
+---
+
+### 참고사항
+
+- `data_request` 하위 옵션을 켜면 응답에 게임 이름, 이미지, 출시일 등 추가 정보가 포함된다. 단, 기본 호출(파라미터 없이)에서는 `rank`, `appid`, `concurrent_in_game`, `peak_in_game`만 반환된다.
+- `appid`만으로는 게임 이름을 알 수 없으므로, 이름이 필요하면 `include_basic_info: true`를 설정하거나, 별도로 `IStoreService/GetAppList`로 매핑 테이블을 만들어 두는 것이 좋다.
+- 응답 데이터는 약 100개의 랭킹 항목을 반환한다 (기본값 기준).
