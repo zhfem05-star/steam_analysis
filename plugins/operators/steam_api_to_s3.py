@@ -2,7 +2,7 @@
 Steam API → S3 커스텀 오퍼레이터
 
 Steam API를 호출하고 응답 JSON을 S3(MinIO)에 저장한다.
-API 호출은 SteamApiHook, S3 업로드는 SteamS3Hook에 위임.
+API 호출은 SteamApiHook, S3 업로드는 S3Hook에 위임.
 """
 
 from __future__ import annotations

@@ -206,21 +206,22 @@ class SteamApiHook:
 
     def get_query(
             self,
-            query_name: str, 
-            query: str, 
-            context: str = "", 
-            data_request: str = "", 
-            override_country_code: str = "",
+            query_name: str = "",
             start: int = 0,
-            count: int = 1000, # type: ignore
+            count: int = 1000,
             sort: int = 0,
-            filters: dict = None
+            filters: dict | None = None,
+            context: dict | None = None,
+            data_request: dict | None = None,
     ) -> dict:
         """
-        :params: 
-            최상위 파라미터: key, query_name, query, context, data_request, override_country_code
-            query: start, count, sort, filters
-            sort 카테고리: 
+        IStoreQueryService/Query/v1 호출
+
+        :params:
+            query_name: 로깅용 쿼리 이름 (결과에 영향 없음)
+            start: 페이지네이션 시작 위치
+            count: 반환할 항목 수 (최대 1000)
+            sort: 정렬 기준
                 RELEVANCE = 0       # 기본 정렬 (관련성)
                 NAME_ASC = 1        # 이름순 (가나다/ABC)
                 RELEASE_ASC = 2     # 출시일 오래된 순
@@ -228,36 +229,32 @@ class SteamApiHook:
                 TRENDING = 11       # 트렌딩
                 TOP_SELLERS = 12    # 베스트셀러
                 RECENT_POPULAR = 13 # 최근 인기
-            filters:
-                released_only   bool    #출시된 게임만 포함
-                coming_soon_only    bool    #출시 예정 게임만 포함
-                type_filter:
-                    include_apps	bool	#앱 포함
-                    include_packages	bool	#패키지 포함
-                    include_bundles	bool	#번들 포함
-                    include_games	bool	#게임 포함
-                    include_demos	bool	#데모 포함
-                    include_mods	bool	#모드 포함
-                    include_dlc	bool	#DLC 포함
-                    include_software	bool	#소프트웨어 포함
+            filters: query.filters 객체
+                released_only           bool    출시된 게임만 포함
+                type_filters:
+                    include_games       bool    게임 포함
+                    include_dlc         bool    DLC 포함
                 price_filters:
-                    only_free_items     bool	무료 게임만
-                    exclude_free_items  bool	무료 게임 제외
-                    min_discount_percent	int32	최소 할인율 (%) — 1 이상 설정 시 할인 중인 게임만 반환
+                    exclude_free_items      bool    무료 게임 제외
+                    min_discount_percent    int32   최소 할인율 (1이상 → 할인 중인 게임만)
+            context: 언어/국가 설정 {"language": "korean", "country_code": "KR"}
+            data_request: 응답에 포함할 데이터 (미설정 시 appid만 반환)
+                include_basic_info              bool    이름, 설명 등 기본 정보
+                include_all_purchase_options    bool    가격, 할인 정보
         """
         url = f"{_BASE_URL_API}/IStoreQueryService/Query/v1/"
 
-        # protobuf 기반 API라 중첩 구조를 input_json으로 전달해야 함
+        # start, count, sort, filters는 query 객체 안에 중첩해야 함
         input_data = {
             "query_name": query_name,
-            "query": query,
-            "context": context,
-            "data_request": data_request,
-            "override_country_code": override_country_code,
-            "start": start,
-            "count": count,
-            "sort": sort,
-            "filters": filters or {},
+            "query": {
+                "start": start,
+                "count": count,
+                "sort": sort,
+                "filters": filters or {},
+            },
+            "context": context or {},
+            "data_request": data_request or {},
         }
 
         params = {
