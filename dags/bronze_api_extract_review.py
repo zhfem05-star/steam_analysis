@@ -12,6 +12,7 @@ from datetime import datetime
 from airflow import DAG
 from airflow.sensors.external_task import ExternalTaskSensor
 
+from callbacks.slack_callback import slack_fail_alert
 from operators.steam_reviews_to_s3 import SteamReviewsToS3Operator
 
 
@@ -34,6 +35,7 @@ with DAG(
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=["steam", "extract"],
+    default_args={"on_failure_callback": slack_fail_alert},
 ) as dag:
 
     # steam_rawdata_extract DAG의 push_app_ids 완료를 감지

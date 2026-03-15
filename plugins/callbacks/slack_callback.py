@@ -17,19 +17,18 @@ import os
 
 import requests
 
+import logging
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 def slack_fail_alert(context) -> None:
-    """
-    태스크 실패 시 Slack에 알림을 전송한다.
 
-    전송 정보:
-      - DAG ID / Task ID
-      - 실행 시간 (execution_date)
-      - 에러 메시지
-      - Airflow 로그 URL
-    """
+    log = logging.getLogger(__name__)
+
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook_url:
+        log.warning("SLACK_WEBHOOK_URL 환경변수가 없어서 Slack 알림 건너뜀")
         return
 
     ti = context["task_instance"]
@@ -50,5 +49,11 @@ def slack_fail_alert(context) -> None:
             }
         ]
     }
+
+    try:
+        response = requests.post(webhook_url, json=message, timeout=10)
+        log.info("Slack 응답: %s / %s", response.status_code, response.text)
+    except Exception as e:
+        log.error("Slack 전송 실패: %s", e)
 
     requests.post(webhook_url, json=message, timeout=10)

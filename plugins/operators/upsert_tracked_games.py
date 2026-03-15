@@ -38,15 +38,18 @@ class UpsertTrackedGamesOperator(BaseOperator):
         today = context["execution_date"].date()
 
         hook = PostgresHook(postgres_conn_id=self.postgres_conn_id)
-        hook.run(
-            sql="""
+        conn = hook.get_conn()
+        cursor = conn.cursor()
+        cursor.executemany(
+            """
                 INSERT INTO tracked_games (appid, first_seen, last_discounted)
                 VALUES (%s, %s, %s)
                 ON CONFLICT (appid) DO UPDATE
                     SET last_discounted = EXCLUDED.last_discounted
             """,
-            parameters=[(appid, today, today) for appid in app_ids],
-            autocommit=True,
+                [(appid, today, today) for appid in app_ids],
         )
+        
+        conn.commit()
 
         self.log.info("tracked_games UPSERT 완료: %d개", len(app_ids))

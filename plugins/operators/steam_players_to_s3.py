@@ -45,8 +45,10 @@ class SteamPlayersToS3Operator(BaseOperator):
 
     def execute(self, context):
         # 1) upstream XCom에서 appid 리스트 pull
+        # 같은 DAG 내 태스크면 dag_id 생략 (현재 run의 XCom을 정확히 참조)
+        current_dag_id = context["ti"].dag_id
         app_ids: list[int] = context["ti"].xcom_pull(
-            dag_id=self.app_ids_dag_id,
+            dag_id=self.app_ids_dag_id if self.app_ids_dag_id != current_dag_id else None,
             task_ids=self.app_ids_task_id,
         )
 

@@ -14,6 +14,7 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
+from callbacks.slack_callback import slack_fail_alert
 from operators.steam_players_to_s3 import SteamPlayersToS3Operator
 
 
@@ -31,6 +32,7 @@ with DAG(
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=["steam", "extract"],
+    default_args={"on_failure_callback": slack_fail_alert},
 ) as dag:
 
     # tracked_games DB에서 추적 대상 appid 리스트 조회 → XCom push

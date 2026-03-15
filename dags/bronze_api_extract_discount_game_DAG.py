@@ -9,6 +9,7 @@ from datetime import datetime
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
+from callbacks.slack_callback import slack_fail_alert
 from hooks.s3_hook import SteamS3Hook
 from operators.steam_api_to_s3 import SteamApiToS3Operator
 from operators.upsert_tracked_games import UpsertTrackedGamesOperator
@@ -30,6 +31,7 @@ with DAG(
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=["steam", "extract"],
+    default_args={"on_failure_callback": slack_fail_alert},
 ) as dag:
 
     # 할인 중인 게임 목록 조회 → steam-raw 버킷에 저장
