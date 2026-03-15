@@ -30,6 +30,9 @@ x-airflow-common: &airflow-common
     # Steam API Key (실행 시 .env 파일에서 로드)
     STEAM_API_KEY: ${STEAM_API_KEY}
 
+    # Slack Webhook URL (실행 시 .env 파일에서 로드)
+    SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
+
   volumes:
     - ./dags:/opt/airflow/dags           # DAG 파일들
     - ./plugins:/opt/airflow/plugins     # 커스텀 플러그인

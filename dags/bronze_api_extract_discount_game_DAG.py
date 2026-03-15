@@ -7,8 +7,21 @@ Steam API에서 데이터를 수집하여 MinIO(S3) steam-raw 버킷에 저장�
 from datetime import datetime
 
 from airflow import DAG
+from airflow.operators.python import PythonOperator
 
+from hooks.s3_hook import SteamS3Hook
 from operators.steam_api_to_s3 import SteamApiToS3Operator
+from operators.upsert_tracked_games import UpsertTrackedGamesOperator
+
+
+def _extract_app_ids(**context):
+    """S3에 저장된 할인 게임 JSON에서 appid 리스트를 추출해 XCom으로 반환."""
+    s3_key = context["ti"].xcom_pull(task_ids="fetch_discount_games")
+    s3_hook = SteamS3Hook()
+    data = s3_hook.read_json(key=s3_key)
+    app_ids = [item["appid"] for item in data["response"]["ids"]]
+    return app_ids  # XCom return_value 로 자동 push
+
 
 with DAG(
     dag_id="steam_rawdata_extract",
@@ -25,7 +38,7 @@ with DAG(
         method="get_query",
         method_params={
             "sort": 12,             # TOP_SELLERS
-            "count": 1000,
+            "count": 400,
             "filters": {
                 "released_only": True,
                 "type_filters": {                       # type_filters (복수)
@@ -47,3 +60,17 @@ with DAG(
         },
         s3_key="discount_games/{{ execution_date.strftime('%Y%m%d_%H%M') }}_discount_game_data.json",
     )
+
+    # S3 JSON → appid 리스트 추출 후 XCom push (downstream DAG에서 참조)
+    push_app_ids = PythonOperator(
+        task_id="push_app_ids",
+        python_callable=_extract_app_ids,
+    )
+
+    # appid 리스트 → tracked_games 테이블 UPSERT (동접자 추적 목록 누적 관리)
+    upsert_tracked_games = UpsertTrackedGamesOperator(
+        task_id="upsert_tracked_games",
+        app_ids_task_id="push_app_ids",
+    )
+
+    fetch_discount_games >> push_app_ids >> upsert_tracked_games

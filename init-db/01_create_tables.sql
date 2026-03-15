@@ -4,6 +4,16 @@
 -- ============================================================
 
 -- ========================
+-- Control Tables
+-- ========================
+
+CREATE TABLE IF NOT EXISTS tracked_games (
+    appid           INTEGER PRIMARY KEY,
+    first_seen      DATE NOT NULL,
+    last_discounted DATE NOT NULL
+);
+
+-- ========================
 -- Dimension Tables
 -- ========================
 
