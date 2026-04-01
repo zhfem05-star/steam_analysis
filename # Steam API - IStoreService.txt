@@ -9,11 +9,15 @@
 | 파라미터 | 타입 | 필수 | 기본값 | 설명 |
 |---------|------|------|--------|------|
 | `key` | string | ✅ | - | Steam Web API 키 |
-| `max_results` | int | ❌ | 10000 | 최대 반환 개수 (최대: 50000) |
-| `last_appid` | int | ❌ | 0 | 페이지네이션용 |
+| `if_modified_since` | uint32 | ❌ | - | 이 Unix timestamp 이후 수정된 항목만 반환 (증분 수집용) |
+| `have_description_language` | string | ❌ | - | 해당 언어 설명이 있는 앱만 반환 (예: `korean`, `english`) |
 | `include_games` | bool | ❌ | true | 게임 포함 |
 | `include_dlc` | bool | ❌ | false | DLC 포함 |
 | `include_software` | bool | ❌ | false | 소프트웨어 포함 |
+| `include_videos` | bool | ❌ | false | 동영상·시리즈 포함 |
+| `include_hardware` | bool | ❌ | false | 하드웨어 포함 |
+| `last_appid` | uint32 | ❌ | 0 | 페이지네이션용: 이전 응답의 `last_appid` 값을 그대로 전달 |
+| `max_results` | uint32 | ❌ | 10000 | 한 번에 반환할 최대 개수 (최대: 50000) |
 
 ### 응답
 

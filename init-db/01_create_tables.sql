@@ -6,11 +6,25 @@
 -- ========================
 -- Control Tables
 -- ========================
+-- 각 DAG가 "어떤 게임을", "어떤 데이터를" 수집할지 DB에서 제어하기 위한 설정 테이블.
+-- 코드 수정 없이 UPDATE 한 줄로 수집 대상과 범위를 조정할 수 있다.
+--
+-- is_active            : FALSE로 설정하면 리뷰·동접자 모든 수집에서 제외
+-- collect_reviews      : FALSE면 02 리뷰 DAG가 이 게임을 건너뜀
+-- collect_players      : FALSE면 03 동접자 DAG가 이 게임을 건너뜀
+-- reviews_collected_at : 마지막 리뷰 수집 완료 시각. NULL이면 아직 미수집
+-- review_cursors       : 언어별 Steam 리뷰 페이지네이션 커서 {"korean": "...", "english": "..."}
+--                        {}(빈 객체)이면 다음 수집 시 처음("*")부터 전체 수집
 
 CREATE TABLE IF NOT EXISTS tracked_games (
-    appid           INTEGER PRIMARY KEY,
-    first_seen      DATE NOT NULL,
-    last_discounted DATE NOT NULL
+    appid                INTEGER  PRIMARY KEY,
+    first_seen           DATE     NOT NULL,
+    last_discounted      DATE     NOT NULL,
+    is_active            BOOLEAN  NOT NULL DEFAULT TRUE,
+    collect_reviews      BOOLEAN  NOT NULL DEFAULT TRUE,
+    collect_players      BOOLEAN  NOT NULL DEFAULT TRUE,
+    reviews_collected_at TIMESTAMP,
+    review_cursors       JSONB    NOT NULL DEFAULT '{}'
 );
 
 -- ========================

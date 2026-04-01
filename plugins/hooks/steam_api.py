@@ -161,33 +161,97 @@ class SteamApiHook:
     def get_app_reviews(
         self,
         appid: int,
-        num_reviews: int = 100,
-        language: str = "all",
+        cursors: dict[str, str] | None = None,
+        num_reviews: int | None = None,
+        languages: list[str] | None = None,
         filter_type: str = "recent",
-    ) -> list[dict]:
+    ) -> tuple[list[dict], dict[str, str]]:
         """
-        게임 리뷰 조회 (cursor 페이지네이션 자동 처리)
+        게임 리뷰 조회 (다국어 + cursor 기반 증분 수집)
 
-        :return: 리뷰 리스트
+        :param cursors:     언어별 시작 cursor. {"korean": "AoJ...", "english": "AoJ..."}
+                            None 또는 키 누락 시 해당 언어를 처음부터("*") 수집.
+        :param num_reviews: 언어별 최대 수집 수. None이면 전체 수집.
+        :param languages:   수집할 언어 목록. 기본값 ["korean", "english"]
+        :return: (중복 제거된 리뷰 리스트, 언어별 마지막 cursor 딕셔너리)
+                 next_cursors는 tracked_games.review_cursors에 저장하여 다음 실행 시 재사용.
+        """
+        if languages is None:
+            languages = ["korean", "english"]
+        if cursors is None:
+            cursors = {}
+
+        seen_ids: set[int] = set()
+        all_reviews: list[dict] = []
+        next_cursors: dict[str, str] = {}
+
+        for language in languages:
+            start_cursor = cursors.get(language, "*")
+            lang_reviews, last_cursor = self._get_reviews_for_language(
+                appid=appid,
+                language=language,
+                start_cursor=start_cursor,
+                num_reviews=num_reviews,
+                filter_type=filter_type,
+            )
+            next_cursors[language] = last_cursor
+            for review in lang_reviews:
+                rid = review.get("recommendationid")
+                if rid not in seen_ids:
+                    seen_ids.add(rid)
+                    all_reviews.append(review)
+            log.info(
+                "appid=%s language=%s 수집 완료: %d개 (전체 누적 %d개)",
+                appid, language, len(lang_reviews), len(all_reviews),
+            )
+
+        return all_reviews, next_cursors
+
+    def _get_reviews_for_language(
+        self,
+        appid: int,
+        language: str,
+        start_cursor: str = "*",
+        num_reviews: int | None = None,
+        filter_type: str = "recent",
+    ) -> tuple[list[dict], str]:
+        """
+        단일 언어 리뷰 페이지네이션.
+
+        :return: (리뷰 리스트, 마지막으로 받은 cursor)
+                 cursor는 다음 실행의 start_cursor로 사용하여 이어서 수집 가능.
         """
         url = f"{_BASE_URL_STORE}/appreviews/{appid}"
-        reviews = []
-        cursor = "*"
+        reviews: list[dict] = []
+        cursor = start_cursor
+        last_cursor = start_cursor
 
-        while len(reviews) < num_reviews:
+        while True:
+            remaining = None if num_reviews is None else num_reviews - len(reviews)
+            if remaining is not None and remaining <= 0:
+                break
+
             params = {
                 "json": 1,
                 "filter": filter_type,
                 "language": language,
-                "num_per_page": min(100, num_reviews - len(reviews)),
+                "num_per_page": 100 if remaining is None else min(100, remaining),
                 "cursor": cursor,
                 "purchase_type": "all",
             }
 
-            data = self._request(url, params)
+            try:
+                data = self._request(url, params)
+            except Exception as e:
+                # 네트워크/타임아웃 오류 — 마지막으로 성공한 cursor까지만 반환
+                log.error(
+                    "페이지 요청 실패, 수집 중단: appid=%s language=%s cursor=%s error=%s",
+                    appid, language, cursor, e,
+                )
+                break
 
             if data.get("success") != 1:
-                log.warning("리뷰 조회 실패: appid=%s", appid)
+                log.warning("리뷰 조회 실패: appid=%s language=%s", appid, language)
                 break
 
             batch = data.get("reviews", [])
@@ -195,14 +259,65 @@ class SteamApiHook:
                 break
 
             reviews.extend(batch)
-            cursor = data.get("cursor")
-
-            log.info("리뷰 %d개 수신 (누적: %d)", len(batch), len(reviews))
+            last_cursor = data.get("cursor", cursor)
+            cursor = last_cursor
+            log.info("리뷰 %d개 수신 (누적: %d, 언어=%s)", len(batch), len(reviews), language)
             self._wait()
 
-        return reviews[:num_reviews]
+        return reviews, last_cursor
 
+    def iter_review_pages(
+        self,
+        appid: int,
+        language: str,
+        start_cursor: str = "*",
+        filter_type: str = "recent",
+    ):
+        """
+        단일 언어 리뷰를 페이지 단위로 yield하는 제너레이터.
 
+        rate limit 대기(sleep)를 yield 이후에 수행하므로,
+        호출 측에서 yield된 데이터를 처리하는 동안 대기 시간이 겹친다.
+
+        :yield: (page_reviews: list[dict], next_cursor: str)
+        """
+        url = f"{_BASE_URL_STORE}/appreviews/{appid}"
+        cursor = start_cursor
+
+        while True:
+            params = {
+                "json": 1,
+                "filter": filter_type,
+                "language": language,
+                "num_per_page": 100,
+                "cursor": cursor,
+                "purchase_type": "all",
+            }
+
+            try:
+                data = self._request(url, params)
+            except Exception as e:
+                log.error(
+                    "페이지 요청 실패, 중단: appid=%s language=%s cursor=%s error=%s",
+                    appid, language, cursor, e,
+                )
+                return
+
+            if data.get("success") != 1:
+                log.warning("리뷰 조회 실패: appid=%s language=%s", appid, language)
+                return
+
+            batch = data.get("reviews", [])
+            if not batch:
+                return
+
+            next_cursor = data.get("cursor", cursor)
+            log.info("페이지 수신: appid=%s language=%s 리뷰=%d개", appid, language, len(batch))
+
+            yield batch, next_cursor  # consumer가 이 데이터를 처리하는 동안
+
+            cursor = next_cursor
+            self._wait()              # rate limit 대기 — consumer 처리와 시간이 겹침
 
     def get_query(
             self,
