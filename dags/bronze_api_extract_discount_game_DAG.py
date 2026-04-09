@@ -27,7 +27,7 @@ def _extract_app_ids(**context):
 with DAG(
     dag_id="steam_bronze_01_discount_game_extract",
     description="Steam API → MinIO(steam-raw) 할인 게임 원본 데이터 수집",
-    schedule="0 1 * * *",      # 매일 새벽 1시 UTC (한국시간 오전 10시)
+    schedule="0 8 * * *",      # 매일 08:00 UTC (한국시간 오후 5시)
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=["steam", "extract"],

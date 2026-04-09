@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS fact_price_history (
     final_price         INTEGER,
     discount_percent    INTEGER DEFAULT 0,
     is_free             BOOLEAN DEFAULT FALSE,
+    discount_end_at     TIMESTAMP,
     collected_at        DATE NOT NULL,
     UNIQUE (app_id, collected_at)
 );

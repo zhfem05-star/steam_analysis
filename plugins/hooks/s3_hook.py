@@ -12,6 +12,7 @@ import polars as pl
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
 BUCKET_RAW = "steam-raw"
+BUCKET_SILVER = "steam-silver"
 BUCKET_PROCESSED = "steam-processed"
 
 
@@ -94,3 +95,13 @@ class SteamS3Hook:
     def key_exists(self, key: str, bucket: str = BUCKET_RAW) -> bool:
         """S3 키 존재 여부 확인"""
         return self._hook.check_for_key(key=key, bucket_name=bucket)
+
+    def list_keys(self, prefix: str, bucket: str = BUCKET_RAW) -> list[str]:
+        """
+        prefix에 해당하는 S3 키 목록 반환.
+
+        :param prefix: 검색할 경로 prefix. 예: "appdetails/20250409_0800/"
+        :return: 매칭되는 전체 키 목록 (없으면 빈 리스트)
+        """
+        keys = self._hook.list_keys(bucket_name=bucket, prefix=prefix)
+        return keys or []

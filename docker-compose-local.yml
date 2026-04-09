@@ -123,8 +123,9 @@ services:
       /bin/sh -c "
       mc alias set local http://minio:9000 minioadmin minioadmin;
       mc mb local/steam-raw --ignore-existing;
+      mc mb local/steam-silver --ignore-existing;
       mc mb local/steam-processed --ignore-existing;
-      echo 'MinIO 버킷 생성 완료: steam-raw, steam-processed';
+      echo 'MinIO 버킷 생성 완료: steam-raw, steam-silver, steam-processed';
       "
 
   # ============================================================
