@@ -28,6 +28,7 @@ with DAG(
     collect_reviews = SteamReviewsToS3Operator(
         task_id="collect_reviews",
         s3_key_prefix="reviews/{{ execution_date.strftime('%Y%m%d_%H%M') }}",
+        # app_ids=[730],  # 730, 570, 1623730 CS2, Dota2, palworld. 테스트용으로 소수 지정. 전체 수집 시 UpsertTrackedGamesOperator에서 app_id 리스트를 XCom으로 받아 사용.
         # app_id_limit : 수집할 게임 수 제한. 테스트 시 소수 지정, 전체 수집 시 None
         app_id_limit=5,
         # languages    : 수집 언어 목록. 기본값 ["korean", "english"]

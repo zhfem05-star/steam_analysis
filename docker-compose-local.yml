@@ -10,6 +10,9 @@ version: '3.8'
 x-airflow-common: &airflow-common
   image: apache/airflow:2.8.1-python3.11
   environment: &airflow-common-env
+    # 추가 패키지 설치 (컨테이너 기동 시 자동 pip install)
+    _PIP_ADDITIONAL_REQUIREMENTS: "polars pyarrow"
+
     # Airflow 기본 설정
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
