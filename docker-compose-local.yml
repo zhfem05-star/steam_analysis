@@ -11,7 +11,7 @@ x-airflow-common: &airflow-common
   image: apache/airflow:2.8.1-python3.11
   environment: &airflow-common-env
     # 추가 패키지 설치 (컨테이너 기동 시 자동 pip install)
-    _PIP_ADDITIONAL_REQUIREMENTS: "polars pyarrow"
+    _PIP_ADDITIONAL_REQUIREMENTS: "polars pyarrow kiwipiepy apache-airflow-providers-docker"
 
     # Airflow 기본 설정
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -172,12 +172,31 @@ services:
     <<: *airflow-common
     container_name: airflow-scheduler
     command: scheduler
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./plugins:/opt/airflow/plugins
+      - ./scripts:/opt/airflow/scripts
+      - ./logs:/opt/airflow/logs
+      - /var/run/docker.sock:/var/run/docker.sock   # DockerOperator용 docker socket
     healthcheck:
       test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $(hostname)"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  # ============================================================
+  # 7. dbt (DockerOperator가 이 이미지로 컨테이너를 생성하여 실행)
+  # ============================================================
+  dbt:
+    build:
+      context: ./dbt
+      dockerfile: Dockerfile
+    image: steam-dbt:latest       # DockerOperator에서 참조할 이미지명
+    profiles: ["dbt"]             # docker-compose up 시 자동 시작 안 함 (빌드 전용)
+    depends_on:
+      analytics-postgres:
+        condition: service_healthy
 
 volumes:
   airflow_pg_data:

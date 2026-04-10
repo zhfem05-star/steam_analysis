@@ -113,6 +113,29 @@ CREATE TABLE IF NOT EXISTS fact_reviews (
 );
 
 -- ========================
+-- Gold Tables
+-- ========================
+
+-- 게임별·언어별 리뷰 형태소 빈도 테이블
+-- 워드클라우드 시각화용. language 필터로 한국어/영어/전체 구분 가능.
+--
+-- frequency        : 형태소 총 등장 횟수 (동일 리뷰에서 여러 번 등장해도 전부 카운트)
+-- review_appearances: 해당 형태소가 등장한 리뷰 수 (도배성 리뷰 영향 완화용)
+-- earliest/latest  : 분석에 포함된 리뷰의 시간 범위
+
+CREATE TABLE IF NOT EXISTS gold_review_morphemes (
+    app_id              INTEGER      NOT NULL,
+    language            VARCHAR(20)  NOT NULL,
+    morpheme            VARCHAR(200) NOT NULL,
+    frequency           INTEGER      NOT NULL,
+    review_appearances  INTEGER      NOT NULL,
+    earliest_review_at  TIMESTAMP,
+    latest_review_at    TIMESTAMP,
+    updated_at          TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (app_id, language, morpheme)
+);
+
+-- ========================
 -- 인덱스 (쿼리 성능용)
 -- ========================
 
@@ -130,6 +153,12 @@ CREATE INDEX IF NOT EXISTS idx_reviews_language
 
 CREATE INDEX IF NOT EXISTS idx_game_genres_genre
     ON dim_game_genres (genre_id);
+
+CREATE INDEX IF NOT EXISTS idx_morphemes_app_lang
+    ON gold_review_morphemes (app_id, language);
+
+CREATE INDEX IF NOT EXISTS idx_morphemes_frequency
+    ON gold_review_morphemes (app_id, language, frequency DESC);
 
 -- ========================
 -- 완료 메시지

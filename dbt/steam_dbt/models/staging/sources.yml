@@ -1,0 +1,19 @@
+version: 2
+
+sources:
+  - name: steam_silver
+    description: "Silver 레이어 - Airflow Silver DAG가 적재한 정제 데이터"
+    schema: public
+    tables:
+      - name: dim_games
+        description: "게임 메타데이터 (이름, 개발사, 플랫폼, 출시일)"
+      - name: dim_genres
+        description: "장르 디멘전"
+      - name: dim_game_genres
+        description: "게임-장르 N:M 관계"
+      - name: fact_price_history
+        description: "일별 할인 가격 이력"
+      - name: fact_concurrent_players
+        description: "동접자 수 스냅샷 (하루 2회)"
+      - name: gold_review_morphemes
+        description: "게임별·언어별 리뷰 형태소 빈도 (Airflow Gold DAG 적재)"

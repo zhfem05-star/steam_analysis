@@ -1,0 +1,21 @@
+name: "steam_dbt"
+version: "1.0.0"
+config-version: 2
+
+profile: "steam_dbt"
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  steam_dbt:
+    staging:
+      +materialized: view       # staging은 뷰 (원본 테이블 직접 참조)
+      +schema: staging
+    marts:
+      +materialized: table      # marts는 실제 테이블 (Gold 분석용)
+      +schema: marts

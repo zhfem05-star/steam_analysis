@@ -1,0 +1,12 @@
+steam_dbt:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: analytics-postgres     # docker-compose 서비스명
+      user: analytics
+      password: analytics
+      port: 5432
+      dbname: steam_analytics
+      schema: public
+      threads: 4

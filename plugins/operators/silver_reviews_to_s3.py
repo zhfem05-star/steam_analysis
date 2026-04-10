@@ -2,15 +2,19 @@
 Bronze reviews parquet → Silver S3 파티셔닝 오퍼레이터
 
 S3 Bronze의 리뷰 parquet 청크 파일들을 읽어 변환한 뒤
-Silver 버킷에 appid / year / month 기준으로 파티셔닝하여 저장한다.
+Silver 버킷에 appid / language / year / month 기준으로 파티셔닝하여 저장한다.
 
 Bronze 구조:  reviews/{YYYYMMDD_HHMM}/{appid}_chunk_{N:03d}.parquet
-Silver 구조:  reviews/appid={appid}/year={Y}/month={M}/{YYYYMMDD_HHMM}_chunk_{N:03d}.parquet
+Silver 구조:  reviews/appid={appid}/language={lang}/year={Y}/month={M}/{filename}.parquet
+
+파티션 키에 language를 포함하므로 경로만으로 언어 구분 가능:
+  - reviews/appid=730/language=korean/...
+  - reviews/appid=730/language=english/...
 
 변환 내용:
-  - author struct → 컬럼으로 펼치기 (author_steamid, author_playtime_forever 등)
+  - author struct → 컬럼으로 펼치기 (author_steamid 등)
   - timestamp_created / timestamp_updated → UTC datetime 변환
-  - year, month 파티션 컬럼 추가 (timestamp_created 기준)
+  - review_year, review_month 파티션 컬럼 추가 (timestamp_created 기준)
 """
 
 from __future__ import annotations
@@ -61,26 +65,24 @@ class SilverReviewsToS3Operator(BaseOperator):
             df = s3_hook.read_parquet(key=key, bucket=BUCKET_RAW)
             df = self._transform(df)
 
-            # appid별로 그룹화하여 파티션 경로에 저장
-            for appid, group_df in df.group_by("appid"):
-                appid_val = appid[0]
-                # 파티션 키: 해당 청크 내 가장 오래된 리뷰의 년·월 기준
-                year = group_df["review_year"][0]
-                month = group_df["review_month"][0]
+            filename = key.split("/")[-1]  # {appid}_chunk_{N:03d}.parquet
 
-                # Bronze 파일명에서 시간 prefix + chunk 번호 추출하여 Silver 파일명 구성
-                filename = key.split("/")[-1]  # {appid}_chunk_{N:03d}.parquet
+            # appid + language + year + month 로 그룹화하여 파티션 경로에 저장
+            for (appid_val, lang, year, month), group_df in df.group_by(
+                ["appid", "language", "review_year", "review_month"]
+            ):
                 silver_key = (
                     f"{self.silver_prefix}/"
                     f"appid={appid_val}/"
+                    f"language={lang}/"
                     f"year={year}/month={month:02d}/"
                     f"{filename}"
                 )
 
                 s3_hook.upload_parquet(df=group_df, key=silver_key, bucket=BUCKET_SILVER)
                 self.log.info(
-                    "Silver 저장: appid=%s  %d/%02d  파일=%s  리뷰=%d건",
-                    appid_val, year, month, filename, len(group_df),
+                    "Silver 저장: appid=%s  language=%s  %d/%02d  리뷰=%d건",
+                    appid_val, lang, year, month, len(group_df),
                 )
 
             processed += 1
@@ -101,7 +103,6 @@ class SilverReviewsToS3Operator(BaseOperator):
         # author struct 펼치기
         if "author" in df.columns:
             author_df = df.select(pl.col("author").struct.unnest())
-            # 컬럼명 충돌 방지를 위해 author_ prefix 추가
             author_df = author_df.rename(
                 {col: f"author_{col}" for col in author_df.columns}
             )
@@ -123,7 +124,6 @@ class SilverReviewsToS3Operator(BaseOperator):
                 pl.col("timestamp_created").dt.month().alias("review_month"),
             ])
         else:
-            # timestamp 없을 경우 기본값
             df = df.with_columns([
                 pl.lit(0).alias("review_year"),
                 pl.lit(0).alias("review_month"),

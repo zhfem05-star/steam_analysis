@@ -131,7 +131,7 @@ recommendations_total, collected_at
 
 | 적재 위치 | 파티션 구조 | 처리 내용 |
 |----------|-----------|---------|
-| `S3 steam-silver: reviews/` | `appid={id}/year={Y}/month={M}/{filename}.parquet` | author struct 펼치기, timestamp → UTC datetime, year·month 파티션 컬럼 추가 |
+| `S3 steam-silver: reviews/` | `appid={id}/language={lang}/year={Y}/month={M}/{filename}.parquet` | author struct 펼치기, timestamp → UTC datetime, year·month 파티션 컬럼 추가 |
 
 ---
 
@@ -180,6 +180,7 @@ steam-raw/                          ← Bronze 원시 데이터
 steam-silver/                       ← Silver 변환 데이터 (대용량 리뷰만)
   reviews/
     appid={appid}/
-      year={Y}/month={M}/
-        {filename}.parquet
+      language={lang}/              ← 경로만으로 언어 구분 가능 (korean/english)
+        year={Y}/month={M}/
+          {filename}.parquet
 ```
