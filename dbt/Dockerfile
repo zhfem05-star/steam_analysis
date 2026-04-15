@@ -1,4 +1,6 @@
-FROM ghcr.io/dbt-labs/dbt-postgres:1.8.0
+FROM python:3.11-slim
+
+RUN pip install --no-cache-dir dbt-core dbt-postgres
 
 WORKDIR /usr/app/dbt
 
