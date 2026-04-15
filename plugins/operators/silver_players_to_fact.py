@@ -104,4 +104,7 @@ class SilverPlayersToFactOperator(BaseOperator):
             ON CONFLICT (app_id, collected_at) DO UPDATE SET
                 concurrent_in_game = EXCLUDED.concurrent_in_game
         """
-        pg_hook.run(sql, parameters=rows)
+        conn = pg_hook.get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, rows)

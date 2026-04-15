@@ -131,17 +131,21 @@ class SilverDiscountToFactPriceOperator(BaseOperator):
         sql = """
             INSERT INTO fact_price_history (
                 app_id, currency, initial_price, final_price,
-                discount_percent, is_free, collected_at
+                discount_percent, is_free, discount_end_at, collected_at
             ) VALUES (
                 %(app_id)s, %(currency)s, %(initial_price)s, %(final_price)s,
-                %(discount_percent)s, %(is_free)s, %(collected_at)s
+                %(discount_percent)s, %(is_free)s, %(discount_end_at)s, %(collected_at)s
             )
             ON CONFLICT (app_id, collected_at) DO UPDATE SET
                 currency         = EXCLUDED.currency,
                 initial_price    = EXCLUDED.initial_price,
                 final_price      = EXCLUDED.final_price,
                 discount_percent = EXCLUDED.discount_percent,
-                is_free          = EXCLUDED.is_free
+                is_free          = EXCLUDED.is_free,
+                discount_end_at  = EXCLUDED.discount_end_at
         """
-        pg_hook.run(sql, parameters=rows)
+        conn = pg_hook.get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, rows)
         self.log.info("fact_price_history UPSERT 완료: %d건", len(rows))

@@ -88,9 +88,14 @@ class SteamS3Hook:
         )
 
     def read_parquet(self, key: str, bucket: str = BUCKET_RAW) -> pl.DataFrame:
-        """S3에서 Parquet 파일을 읽어 Polars DataFrame으로 반환."""
-        content = self._hook.read_key(key=key, bucket_name=bucket)
-        return pl.read_parquet(io.BytesIO(content.encode() if isinstance(content, str) else content))
+        """S3에서 Parquet 파일을 읽어 Polars DataFrame으로 반환.
+
+        read_key()는 내부적으로 UTF-8 디코딩을 강제하므로 바이너리인 Parquet에 사용 불가.
+        get_key()로 S3 객체를 직접 가져와 raw bytes로 읽는다.
+        """
+        obj = self._hook.get_key(key=key, bucket_name=bucket)
+        content = obj.get()["Body"].read()  # raw bytes
+        return pl.read_parquet(io.BytesIO(content))
 
     def key_exists(self, key: str, bucket: str = BUCKET_RAW) -> bool:
         """S3 키 존재 여부 확인"""

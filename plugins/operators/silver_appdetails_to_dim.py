@@ -152,7 +152,10 @@ class SilverAppDetailsToDimOperator(BaseOperator):
                 total_recommendations = EXCLUDED.total_recommendations,
                 updated_at            = NOW()
         """
-        pg_hook.run(sql, parameters=rows)
+        conn = pg_hook.get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, rows)
         self.log.info("dim_games UPSERT 완료: %d건", len(rows))
 
     def _upsert_dim_genres(self, pg_hook: PostgresHook, genre_map: dict[int, str]) -> None:
@@ -164,7 +167,10 @@ class SilverAppDetailsToDimOperator(BaseOperator):
             ON CONFLICT (genre_id) DO UPDATE SET
                 genre_name = EXCLUDED.genre_name
         """
-        pg_hook.run(sql, parameters=list(genre_map.items()))
+        conn = pg_hook.get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, list(genre_map.items()))
         self.log.info("dim_genres UPSERT 완료: %d건", len(genre_map))
 
     def _upsert_dim_game_genres(
@@ -177,5 +183,8 @@ class SilverAppDetailsToDimOperator(BaseOperator):
             VALUES (%s, %s)
             ON CONFLICT (app_id, genre_id) DO NOTHING
         """
-        pg_hook.run(sql, parameters=pairs)
+        conn = pg_hook.get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, pairs)
         self.log.info("dim_game_genres UPSERT 완료: %d건", len(pairs))

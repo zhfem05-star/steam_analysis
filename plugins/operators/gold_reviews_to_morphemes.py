@@ -255,4 +255,7 @@ class GoldReviewsToMorphemesOperator(BaseOperator):
                 latest_review_at    = EXCLUDED.latest_review_at,
                 updated_at          = EXCLUDED.updated_at
         """
-        pg_hook.run(sql, parameters=rows)
+        conn = pg_hook.get_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, rows)
