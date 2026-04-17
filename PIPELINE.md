@@ -6,7 +6,66 @@
 Steam API
   └─ Bronze Layer (S3 steam-raw) ── 원시 데이터 그대로 저장
        └─ Silver Layer ─────────── 변환·적재 (PostgreSQL / S3 steam-silver)
-            └─ Gold Layer (dbt) ── 분석용 마트 테이블 (예정)
+            └─ Gold Layer ──────── 분석용 집계·마트 (PostgreSQL / dbt)
+```
+
+---
+
+## 레이어별 저장소 요약
+
+| 레이어 | 저장소 | 데이터 |
+|--------|--------|--------|
+| **Bronze** | `S3 steam-raw` | 원시 JSON/Parquet (할인게임 목록, 리뷰 청크, 동접자 수, 앱 상세) |
+| **Silver** | `S3 steam-silver` | 정제된 리뷰 Parquet (언어·월별 파티셔닝) |
+| **Silver** | `PostgreSQL` | `dim_games`, `dim_genres`, `dim_game_genres`, `fact_price_history`, `fact_concurrent_players`, `fact_review_daily` |
+| **Gold** | `PostgreSQL` | `gold_review_morphemes` (형태소 빈도), `mart_*` (dbt 마트 테이블) |
+
+### PostgreSQL 테이블 전체 목록
+
+```
+[컨트롤]
+  tracked_games                ← 수집 대상 게임 목록 및 상태
+
+[Silver - 디멘전]
+  dim_games                    ← 게임 기본 정보 (이름, 개발사, 플랫폼 등)
+  dim_genres                   ← 장르 코드·이름
+  dim_game_genres              ← 게임-장르 N:M 관계
+
+[Silver - 팩트]
+  fact_price_history           ← 일별 가격·할인 스냅샷
+  fact_concurrent_players      ← 일별 동접자 수 스냅샷
+  fact_review_daily            ← 언어·날짜별 리뷰 작성 수 집계
+
+[Gold]
+  gold_review_morphemes        ← 게임·언어별 형태소 빈도 (워드클라우드용)
+  mart_game_overview           ← 게임 종합 정보 (dim + 최신 가격 + 장르)
+  mart_player_daily_avg        ← 동접자 일평균
+  mart_discount_analysis       ← 할인율 이력 집계
+  mart_discount_player_trend   ← 할인 구간별 동접자 수 추이
+  mart_discount_review_trend   ← 할인 구간별 리뷰 수 추이 (A/B 비교)
+```
+
+### S3 버킷 구조
+
+```
+steam-raw/                              ← Bronze 원시 데이터
+  discount_games/
+    {YYYYMMDD_HHMM}_discount_game_data.json
+  reviews/
+    {YYYYMMDD_HHMM}/
+      {appid}_chunk_{N:03d}.parquet
+  player_counts/
+    {YYYYMMDD_HHMM}_player_counts.json
+  appdetails/
+    {YYYYMMDD_HHMM}/
+      {appid}.parquet
+
+steam-silver/                           ← Silver 정제 데이터 (대용량 리뷰만 S3 저장)
+  reviews/
+    appid={appid}/
+      language={lang}/                  ← 경로만으로 언어 구분 (korean/english)
+        year={Y}/month={M}/
+          {filename}.parquet
 ```
 
 ---
@@ -146,6 +205,82 @@ recommendations_total, collected_at
 
 ---
 
+### 05. 리뷰 일별 집계 `steam_silver_05_review_daily`
+
+**스케줄:** 매일 10:00 UTC  
+**소스:** `S3 steam-silver: reviews/appid={id}/language={lang}/...`
+
+| 적재 테이블 | 주요 컬럼 | 처리 내용 |
+|------------|---------|---------|
+| `fact_review_daily` | app_id, language, review_date, review_count | Silver S3 리뷰 전체 읽어 언어·날짜별 건수 집계, UPSERT |
+
+- `tracked_games`의 is_active=TRUE 게임 전체 대상
+- `timestamp_created` 기준으로 날짜 집계 (UTC)
+- 한국어(`korean`) / 영어(`english`) 각각 별도 행으로 저장
+
+**Gold 연결:** → `steam_gold_01_review_morphemes`, `steam_gold_02_dbt_marts`
+
+---
+
+## Gold Layer
+
+### 01. 형태소 빈도 집계 `steam_gold_01_review_morphemes`
+
+**스케줄:** 매일 11:00 UTC (Silver 03 완료 후)  
+**소스:** `S3 steam-silver: reviews/`
+
+| 적재 테이블 | 주요 컬럼 | 처리 내용 |
+|------------|---------|---------|
+| `gold_review_morphemes` | app_id, language, morpheme, frequency, review_appearances, earliest_review_at, latest_review_at | 리뷰 전문에서 형태소 추출 후 빈도 집계, UPSERT |
+
+**언어별 분석 방식:**
+
+| 언어 | 라이브러리 | 추출 대상 |
+|------|----------|---------|
+| 한국어 | `kiwipiepy (Kiwi)` | 일반명사(NNG) + 고유명사(NNP), 2글자 이상 |
+| 영어 | 정규식 | 알파벳 단어, 불용어 제거, 3글자 이상 |
+
+- 게임·언어별 상위 1,000개 형태소만 저장 (`top_n=1000`)
+- 형태소 최대 길이 100자 제한
+- Superset 워드클라우드 시각화에 활용
+
+---
+
+### 02. dbt 마트 빌드 `steam_gold_02_dbt_marts`
+
+**스케줄:** 매일 12:00 UTC (Silver + Gold 01 완료 후)  
+**실행 방식:** DockerOperator → `steam-dbt:latest` 컨테이너 실행 후 자동 종료
+
+#### Staging (VIEW)
+
+Silver PostgreSQL 테이블을 그대로 참조하는 가벼운 뷰. 데이터 저장 없음.
+
+| 스테이징 뷰 | 소스 테이블 |
+|------------|----------|
+| `stg_games` | `dim_games` |
+| `stg_price_history` | `fact_price_history` |
+| `stg_concurrent_players` | `fact_concurrent_players` |
+| `stg_review_daily` | `fact_review_daily` |
+
+#### Marts (TABLE)
+
+분석·시각화 목적의 영구 집계 테이블.
+
+| 마트 테이블 | 설명 | 주요 컬럼 |
+|-----------|------|---------|
+| `mart_game_overview` | 게임 종합 정보 | app_id, name, genres, 최신 가격·할인율, 플랫폼, 추천 수 |
+| `mart_player_daily_avg` | 동접자 일평균 | app_id, date, daily_avg_players |
+| `mart_discount_analysis` | 할인 이력 집계 | app_id, 할인 횟수, 평균·최대 할인율, 역대 최저가 |
+| `mart_discount_player_trend` | 할인 구간별 동접자 추이 | app_id, date, is_discounted, concurrent_players, ab_group |
+| `mart_discount_review_trend` | 할인 구간별 리뷰 추이 (A/B) | app_id, date, total/korean/english 리뷰 수, is_discounted, ab_group, baseline_7d_avg |
+
+**`mart_discount_review_trend` 활용 예시:**
+- X축: 날짜, Y축: 리뷰 수, 할인 구간 하이라이트
+- `ab_group = 'discount'` vs `'normal'` 리뷰 수 평균 비교
+- `baseline_7d_avg`: 할인 시작 전 7일 평균 (비교 기준선)
+
+---
+
 ## 컨트롤 테이블 `tracked_games`
 
 Bronze 파이프라인 전체가 이 테이블을 기준으로 수집 대상을 결정한다.
@@ -160,27 +295,3 @@ Bronze 파이프라인 전체가 이 테이블을 기준으로 수집 대상을 
 | `reviews_collected_at` | 마지막 리뷰 수집 완료 시각 |
 | `last_discounted` | 마지막으로 할인 확인된 날짜 |
 
----
-
-## S3 버킷 구조
-
-```
-steam-raw/                          ← Bronze 원시 데이터
-  discount_games/
-    {YYYYMMDD_HHMM}_discount_game_data.json
-  reviews/
-    {YYYYMMDD_HHMM}/
-      {appid}_chunk_{N:03d}.parquet
-  player_counts/
-    {YYYYMMDD_HHMM}_player_counts.json
-  appdetails/
-    {YYYYMMDD_HHMM}/
-      {appid}.parquet
-
-steam-silver/                       ← Silver 변환 데이터 (대용량 리뷰만)
-  reviews/
-    appid={appid}/
-      language={lang}/              ← 경로만으로 언어 구분 가능 (korean/english)
-        year={Y}/month={M}/
-          {filename}.parquet
-```
