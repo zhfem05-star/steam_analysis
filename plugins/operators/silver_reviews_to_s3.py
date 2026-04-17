@@ -117,6 +117,12 @@ class SilverReviewsToS3Operator(BaseOperator):
                     .alias(col)
                 )
 
+        # Steam API 언어 코드 정규화 (koreana → korean)
+        if "language" in df.columns:
+            df = df.with_columns(
+                pl.col("language").replace("koreana", "korean")
+            )
+
         # 파티션 컬럼: timestamp_created 기준 년·월
         if "timestamp_created" in df.columns:
             df = df.with_columns([

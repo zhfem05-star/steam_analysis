@@ -24,7 +24,7 @@ from callbacks.slack_callback import slack_collect_summary
 from hooks.s3_hook import BUCKET_RAW, SteamS3Hook
 from hooks.steam_api import SteamApiHook
 
-# appdetails rate limit: 200 req/5min → 1.5초 간격
+# appdetails rate limit: 200 req/5min = 0.67 req/s → 1.5초 간격 (단일 worker 기준)
 _RATE_LIMIT_SEC = 1.5
 
 
@@ -74,9 +74,9 @@ class SteamAppDetailsToS3Operator(BaseOperator):
         rate limit(200 req/5min)을 고려해 최대 4개로 제한.
         실제 대상 수보다 많은 worker는 의미 없으므로 target_count로 상한.
         """
-        cpu_count = os.cpu_count() or 1
-        ideal = cpu_count + 4
-        return min(ideal, 4, target_count)
+        # rate limit(200 req/5min)으로 인해 병렬 요청이 오히려 403을 유발.
+        # 단일 worker로 순차 실행하여 1.5초 간격을 보장.
+        return min(1, target_count)
 
     def execute(self, context):  # noqa: ARG002
         app_ids = self._fetch_app_ids()

@@ -15,5 +15,7 @@ sources:
         description: "일별 할인 가격 이력"
       - name: fact_concurrent_players
         description: "동접자 수 스냅샷 (하루 2회)"
+      - name: fact_review_daily
+        description: "게임별·언어별 일별 리뷰 수 집계 스냅샷 (Silver 05 DAG 적재)"
       - name: gold_review_morphemes
         description: "게임별·언어별 리뷰 형태소 빈도 (Airflow Gold DAG 적재)"

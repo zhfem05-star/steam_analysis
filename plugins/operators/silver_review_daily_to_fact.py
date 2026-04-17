@@ -76,7 +76,7 @@ class SilverReviewDailyToFactOperator(BaseOperator):
                 s3_hook.read_parquet(key=k, bucket=BUCKET_SILVER)
                 for k in parquet_keys
             ]
-            df = pl.concat(dfs, how="diagonal")
+            df = pl.concat(dfs, how="diagonal_relaxed")
 
             rows = self._aggregate_daily(df, app_id)
             if not rows:

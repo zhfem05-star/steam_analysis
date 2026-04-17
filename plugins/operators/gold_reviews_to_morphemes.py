@@ -42,6 +42,8 @@ _EN_STOPWORDS = frozenset({
 _KO_MIN_LEN = 2
 # 영어 최소 단어 길이
 _EN_MIN_LEN = 3
+# DB VARCHAR(200) 제한에 맞춘 최대 형태소 길이
+_MAX_MORPHEME_LEN = 100
 
 
 class GoldReviewsToMorphemesOperator(BaseOperator):
@@ -213,7 +215,7 @@ class GoldReviewsToMorphemesOperator(BaseOperator):
         return [
             token.form
             for token in tokens
-            if token.tag in ("NNG", "NNP") and len(token.form) >= _KO_MIN_LEN
+            if token.tag in ("NNG", "NNP") and _KO_MIN_LEN <= len(token.form) <= _MAX_MORPHEME_LEN
         ]
 
     @staticmethod
@@ -225,7 +227,7 @@ class GoldReviewsToMorphemesOperator(BaseOperator):
         words = re.findall(r"[a-zA-Z]+", text.lower())
         return [
             w for w in words
-            if len(w) >= _EN_MIN_LEN and w not in _EN_STOPWORDS
+            if _EN_MIN_LEN <= len(w) <= _MAX_MORPHEME_LEN and w not in _EN_STOPWORDS
         ]
 
     # ── DB ───────────────────────────────────────────────
