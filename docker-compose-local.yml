@@ -86,7 +86,7 @@ services:
     ports:
       - "5434:5432"
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "analytics"]
+      test: ["CMD", "pg_isready", "-U", "analytics", "-d", "steam_analytics"]
       interval: 10s
       retries: 5
       start_period: 5s
