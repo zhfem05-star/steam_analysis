@@ -7,3 +7,6 @@ logs/
 # Python
 __pycache__/
 *.pyc
+
+# 가상환경
+.venv/
