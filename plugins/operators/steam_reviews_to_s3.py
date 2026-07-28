@@ -8,7 +8,7 @@ tracked_games 컨트롤 테이블에서 app_id와 언어별 cursor를 조회하�
 Producer(메인 흐름) — API 페이지 요청 → queue에 적재 → rate limit 대기
 Consumer(별도 스레드) — queue에서 꺼내 chunk 버퍼에 누적 → CHUNK_SIZE 도달 시 S3 저장
 
-rate limit 대기(1.5초) 동안 consumer가 S3 write를 병렬로 처리하여
+rate limit 대기(0.5초) 동안 consumer가 S3 write를 병렬로 처리하여
 대기 시간을 유효하게 활용한다.
 chunk 단위로 저장하므로 메모리 사용량이 CHUNK_SIZE로 고정된다.
 
