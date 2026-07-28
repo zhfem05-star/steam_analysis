@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 # Steam API 기본 설정
 _BASE_URL_API = "https://api.steampowered.com"
 _BASE_URL_STORE = "https://store.steampowered.com"
-_RATE_LIMIT_SEC = 1.5
+_RATE_LIMIT_SEC = 0.5
 _TIMEOUT = 30
 
 
