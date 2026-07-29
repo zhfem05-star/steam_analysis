@@ -1,3 +1,6 @@
+"""
+S3 저장 여부와 전처리 여부, 커서 갱신 여부, 그리고 오퍼레이터 전체 로직을 확인하는 테스트 스크립트
+"""
 from unittest.mock import patch, MagicMock
 from operators.steam_reviews_to_s3 import SteamReviewsToS3Operator
 
