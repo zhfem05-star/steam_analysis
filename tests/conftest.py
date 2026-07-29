@@ -2,6 +2,7 @@
 s3 hook 유닛 테스트 스크립트
 로직 상 문제가 없는지 확인하는 런타임 테스트
 MagicMock으로 만들어서 실제 오퍼레이터에 쓰이는 더미 변수로 정의
+DAG의 파라미터에 해당하는 더미 컨텍스트를 통해 로직을 확인하는 작업
 """
 import os
 from pathlib import Path
