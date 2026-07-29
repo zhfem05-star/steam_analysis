@@ -1,6 +1,7 @@
 apache-airflow==2.8.1
 apache-airflow-providers-amazon
 apache-airflow-providers-docker
+apache-airflow-providers-postgres
 polars
 pyarrow
 kiwipiepy
