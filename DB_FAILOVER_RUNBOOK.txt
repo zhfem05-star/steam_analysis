@@ -1,0 +1,169 @@
+====================================================================
+analytics-postgres 장애 대응 런북 (수동 Failover / Switchover 절차)
+====================================================================
+
+작성 배경
+--------------------------------------------------------------------
+analytics-postgres(primary)에 장애가 발생했을 때, 자동 failover 도구
+(Patroni, pg_auto_failover 등)를 도입하지 않고 사람이 직접 대응하는
+것으로 결정함. 이유:
+  - 이 프로젝트 규모(개인/로컬 docker-compose 환경)에서 자동화 도구가
+    요구하는 추가 인프라(etcd, 별도 monitor 노드 등)는 과함
+  - 초 단위 다운타임도 허용 안 되는 서비스가 아니므로, 사람이 개입해도
+    충분히 감당 가능한 수준의 장애 대응 시간이면 됨
+  - 수동 절차를 정확히 문서화해두면, 왜 이 결정을 내렸는지와 실제
+    장애 대응 능력을 동시에 보여줄 수 있음
+
+
+1. 평상시 구조
+--------------------------------------------------------------------
+  analytics-postgres          (primary, 쓰기 가능)
+        │  streaming replication (WAL 스트리밍)
+        ▼
+  analytics-postgres-replica  (standby, 읽기 전용)
+
+  - 복제 방식: PostgreSQL 내장 스트리밍 복제 (physical replication)
+  - 최초 동기화: replica 최초 기동 시 pg_basebackup으로 primary 전체를
+    복사 (init-db-replication/replica-entrypoint.sh)
+  - 이후: WAL을 실시간으로 받아 계속 따라감 (standby.signal, -R 옵션)
+  - replication 전용 계정: replicator (비밀번호는 .env의
+    REPLICATOR_PASSWORD, 두 컨테이너 모두 여기서 주입받음)
+  - 관련 파일:
+      docker-compose-local.yml   (analytics-postgres,
+                                   analytics-postgres-replica 서비스 정의)
+      init-db-replication/00-setup-replication.sh  (primary: replicator
+                                   role 생성 + pg_hba.conf 설정)
+      init-db-replication/replica-entrypoint.sh     (replica: 최초
+                                   pg_basebackup 수행)
+
+  주의: analytics_pg_data 볼륨은 기존에 데이터가 있던 볼륨이라
+  00-setup-replication.sh가 자동 실행되지 않음. replicator role은
+  수동으로 1회 생성해둔 상태여야 함 (아래 "사전 준비" 참고).
+
+
+2. 장애 감지 기준
+--------------------------------------------------------------------
+  아래 중 하나만으로 성급하게 장애로 판단하지 말 것. 일시적인 네트워크
+  순단이나 컨테이너 재시작 중일 수 있음.
+
+  - `docker exec analytics-postgres pg_isready -U analytics` 가
+    수 분간(예: 3~5회, 간격을 두고) 계속 실패
+  - `docker compose ps` 에서 analytics-postgres가 Exited 상태이고
+    자동 재시작도 안 되는 경우
+  - Airflow task 로그에 analytics_db 커넥션 타임아웃/거부 에러가
+    반복적으로 찍히는 경우
+
+  → 위 조건을 반복 확인해서 "일시적 순단이 아니다"라고 판단된 경우에만
+    아래 승격 절차 진행.
+
+
+3. 수동 승격 절차
+--------------------------------------------------------------------
+  Step 1) replica를 승격시켜 쓰기 가능한 상태로 전환
+
+    docker exec analytics-postgres-replica pg_ctl promote -D /var/lib/postgresql/data
+
+    또는 (PostgreSQL 12+ SQL 함수 방식)
+
+    docker exec analytics-postgres-replica psql -U analytics -c "SELECT pg_promote();"
+
+  Step 2) 승격 확인 (반드시 f 가 나와야 함 — t 면 아직 standby 상태)
+
+    docker exec analytics-postgres-replica psql -U analytics -c "SELECT pg_is_in_recovery();"
+
+
+4. 파이프라인 리디렉션 절차
+--------------------------------------------------------------------
+  승격만으로는 아무것도 바뀌지 않음. 아래 두 파일에서 접속 대상을
+  analytics-postgres → analytics-postgres-replica 로 직접 변경해야 함.
+
+  (1) docker-compose-local.yml
+      x-airflow-common.environment.AIRFLOW__CONN__ANALYTICS_DB 값의
+      호스트 부분을 analytics-postgres-replica로 변경
+
+      변경 전:
+        AIRFLOW__CONN__ANALYTICS_DB: postgresql+psycopg2://analytics:analytics@analytics-postgres:5432/steam_analytics
+      변경 후:
+        AIRFLOW__CONN__ANALYTICS_DB: postgresql+psycopg2://analytics:analytics@analytics-postgres-replica:5432/steam_analytics
+
+  (2) dbt/steam_dbt/profiles.yml
+      host: analytics-postgres  →  host: analytics-postgres-replica
+
+
+5. 변경사항 실제 반영 (컨테이너 재생성)
+--------------------------------------------------------------------
+  docker-compose의 environment 값은 컨테이너 "생성 시점"에 고정됨.
+  yml 파일만 수정하고 끝내면 이미 떠 있는 컨테이너는 예전 값을 계속
+  사용하므로, 반드시 재생성까지 진행해야 함.
+
+    docker compose -f docker-compose-local.yml up -d --force-recreate airflow-webserver airflow-scheduler
+
+  dbt는 DockerOperator가 실행할 때마다 새 컨테이너를 띄우며
+  profiles.yml을 새로 읽으므로 별도 재생성 불필요.
+
+
+6. 검증
+--------------------------------------------------------------------
+  - Airflow에서 analytics_db 커넥션으로 정상적으로 쓰기(INSERT/UPSERT)가
+    되는지 확인 (예: 아무 Silver 오퍼레이터 task 재실행)
+  - dbt run이 정상적으로 새 호스트에 접속해서 도는지 확인
+
+    docker exec analytics-postgres-replica psql -U analytics -d steam_analytics -c "\dt"
+
+
+7. 알려진 리스크
+--------------------------------------------------------------------
+  (1) 데이터 유실 가능성
+      기본 스트리밍 복제는 비동기(asynchronous) 방식이므로, primary가
+      죽는 순간 아직 replica에 전달되지 못한 WAL이 있을 수 있음.
+      → 승격 직전 몇 초~수십 초 분량의 최신 쓰기가 유실될 수 있음을
+        감안할 것.
+
+  (2) Split-brain 위험 (가장 위험한 케이스)
+      승격 이후, 원래 죽었던 analytics-postgres가 나중에 다시 살아나면
+      자기가 여전히 primary인 줄 알고 쓰기를 그대로 받아버릴 수 있음.
+      이 경우 승격된 새 primary와 옛 primary 둘 다 쓰기를 받는 상태가
+      되어 데이터가 서로 어긋나게 됨 (합칠 방법 없음).
+
+      → 절대로 옛 analytics-postgres를 그냥 재시작하지 말 것.
+
+
+8. 옛 primary 재편입 절차 (승격 이후, 상황 정리 시)
+--------------------------------------------------------------------
+  옛 analytics-postgres를 다시 쓰려면, "새 replica"로 강등시켜서
+  붙여야 함 (지금과 반대 방향으로 재구성).
+
+  Step 1) 옛 analytics-postgres 컨테이너 완전히 정지 (재시작 금지)
+
+    docker compose -f docker-compose-local.yml stop analytics-postgres
+
+  Step 2) 데이터 볼륨 초기화 (기존 데이터 폐기 — 새 primary 기준으로
+          처음부터 다시 복제받아야 하므로)
+
+    docker compose -f docker-compose-local.yml rm -f analytics-postgres
+    docker volume rm steam-project_analytics_pg_data
+
+  Step 3) replica-entrypoint.sh와 동일한 방식으로, 이번엔 새 primary
+          (구 analytics-postgres-replica)를 대상으로 pg_basebackup을
+          수행하도록 구성을 뒤집어서 재기동
+
+    (init-db-replication/replica-entrypoint.sh의 -h analytics-postgres
+     부분을 -h analytics-postgres-replica로 바꾼 버전 필요, 혹은
+     같은 스크립트를 재사용하되 대상 호스트만 인자로 분리해두는 방식
+     권장)
+
+  이 과정은 실제 장애 상황에서 바로 하기보다, 서비스가 안정된 뒤 여유
+  있을 때 계획적으로 진행할 것.
+
+
+9. 체크리스트 요약
+--------------------------------------------------------------------
+  [ ] 장애가 일시적이지 않는가?
+  [ ] replica를 pg_promote()로 승격시켰는가
+  [ ] pg_is_in_recovery() 가 f 로 나오는가
+  [ ] docker-compose-local.yml의 AIRFLOW__CONN__ANALYTICS_DB를
+      변경했는가
+  [ ] dbt/steam_dbt/profiles.yml의 host를 변경했는가
+  [ ] airflow-webserver / airflow-scheduler를 --force-recreate 했는가
+  [ ] 실제 쓰기가 새 primary(구 replica)로 들어가는지 확인했는가
+  [ ] 옛 primary를 재시작하지 않도록 별도로 표시/공유했는가
