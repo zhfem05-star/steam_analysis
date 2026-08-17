@@ -16,6 +16,7 @@ Steam API
 | 레이어 | 저장소 | 데이터 |
 |--------|--------|--------|
 | **Bronze** | `S3 steam-raw` | 원시 JSON/Parquet (할인게임 목록, 리뷰 청크, 동접자 수, 앱 상세) |
+| **Bronze (리뷰 중간 단계)** | `Kafka (steam-reviews 토픽)` | producer가 발행한 원시 리뷰 메시지. Spark가 소비할 때까지만 존재하는 임시 저장소 (영구 보관소 아님) |
 | **Silver** | `S3 steam-silver` | 정제된 리뷰 Parquet (언어·월별 파티셔닝) |
 | **Silver** | `PostgreSQL` | `dim_games`, `dim_genres`, `dim_game_genres`, `fact_price_history`, `fact_concurrent_players`, `fact_review_daily` |
 | **Gold** | `PostgreSQL` | `gold_review_morphemes` (형태소 빈도), `mart_*` (dbt 마트 테이블) |
@@ -97,9 +98,15 @@ best_purchase_option.active_discounts[].discount_end_date
 
 **스케줄:** 매일 08:00 UTC
 
-| Task | 설명 | 출력 |
-|------|------|------|
-| `collect_reviews` | `tracked_games`의 is_active=TRUE, collect_reviews=TRUE 게임 대상으로 한국어·영어 리뷰 증분 수집 | `S3: reviews/{YYYYMMDD_HHMM}/{appid}_chunk_{N:03d}.parquet` |
+producer(Kafka 발행)와 consumer(S3 저장)가 별도 task로 분리되어 있다.
+기존에는 in-memory `queue.Queue`로 두 역할을 한 task 안에서 이어붙였는데,
+그 연결을 실제 MQ인 Kafka로 대체한 구조다. 저장 결과물(S3 경로·형식)은
+기존과 동일하므로 하위 파이프라인(Silver 이후)은 이 변경을 몰라도 된다.
+
+| Task | 오퍼레이터 | 설명 | 출력 |
+|------|-----------|------|------|
+| `collect_reviews` | `SteamReviewsToKafkaOperator` (producer) | `tracked_games`의 is_active=TRUE, collect_reviews=TRUE 게임 대상으로 한국어·영어 리뷰 증분 수집 → Kafka 발행 | `Kafka: steam-reviews` 토픽 |
+| `publish_reviews_to_s3` | `SparkReviewsKafkaToS3Operator` (consumer) | Spark Structured Streaming이 `steam-reviews` 토픽을 소비하여 appid별로 청크 저장 | `S3: reviews/{YYYYMMDD_HHMM}/{appid}_chunk_{N:03d}.parquet` |
 
 **수집 필드:**
 ```
@@ -109,10 +116,15 @@ votes_up, votes_funny, steam_purchase, received_for_free,
 written_during_early_access, appid (추가)
 ```
 
-**수집 방식:**
+**producer 방식 (`collect_reviews`):**
 - `tracked_games.review_cursors`에 언어별 cursor 저장 → 다음 실행 시 이어서 수집 (증분)
-- 1000건마다 Parquet 청크 파일 1개 생성
-- 수집 완료 후 `tracked_games.reviews_collected_at` 갱신
+- 리뷰 1건마다 Kafka 메시지로 즉시 발행 (key: appid)
+- 1000건 발행마다(또는 완료 시) `tracked_games.reviews_collected_at`·cursor 체크포인트 갱신
+
+**consumer 방식 (`publish_reviews_to_s3`):**
+- Spark standalone 클러스터(master 1 + worker 2)에서 실행
+- `trigger(availableNow=True)`로 동작 — 실행 시점까지 Kafka에 쌓인 메시지를 전부 처리하고 종료 (상시 스트리밍 서비스 아님, Airflow task의 start→finish 생명주기에 맞춤)
+- appid별로 묶어서 배치당 청크 파일 1개씩 생성, 실제 S3 업로드는 기존 `SteamS3Hook`(boto3/Polars) 재사용
 
 **Silver 연결:** → `steam_silver_03_fact_reviews` (S3 silver 파티셔닝)
 
