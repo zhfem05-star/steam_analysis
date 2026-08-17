@@ -6,3 +6,5 @@ polars
 pyarrow
 kiwipiepy
 pytest
+pyspark
+kafka-python

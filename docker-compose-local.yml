@@ -8,10 +8,13 @@ version: '3.8'
 # ============================================================
 
 x-airflow-common: &airflow-common
-  image: apache/airflow:2.8.1-python3.11
+  build:
+    context: ./airflow
+    dockerfile: Dockerfile
+  image: steam-airflow:latest   # pyspark 실행에 필요한 JDK 포함 커스텀 이미지
   environment: &airflow-common-env
     # 추가 패키지 설치 (컨테이너 기동 시 자동 pip install)
-    _PIP_ADDITIONAL_REQUIREMENTS: "polars pyarrow kiwipiepy apache-airflow-providers-docker"
+    _PIP_ADDITIONAL_REQUIREMENTS: "polars pyarrow kiwipiepy apache-airflow-providers-docker pyspark kafka-python pytest"
 
     # Airflow 기본 설정
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -35,6 +38,13 @@ x-airflow-common: &airflow-common
 
     # Slack Webhook URL (실행 시 .env 파일에서 로드)
     SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
+    
+    # Spark 마스터 노드
+    # 주의: Airflow 커넥션 환경변수는 AIRFLOW_CONN_<ID> (싱글 언더스코어) 형식이어야 인식됨
+    AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077
+
+    # Kafka 브로커
+    AIRFLOW_CONN_KAFKA_DEFAULT: kafka://kafka:9092
 
   volumes:
     - ./dags:/opt/airflow/dags           # DAG 파일들
@@ -42,6 +52,7 @@ x-airflow-common: &airflow-common
     - ./scripts:/opt/airflow/scripts     # 유틸리티 스크립트
     - ./logs:/opt/airflow/logs           # 로그
     - ./tests:/opt/airflow/tests         # 테스트
+    - spark_checkpoints:/opt/spark/checkpoints   # Structured Streaming checkpoint (driver 쪽, worker와 동일 경로)
   depends_on:
     airflow-postgres:
       condition: service_healthy
@@ -160,6 +171,91 @@ services:
       "
 
   # ============================================================
+  # 3-1. Kafka (KRaft 모드 — Zookeeper 없이 단일 브로커)
+  # ============================================================
+  kafka:
+    image: apache/kafka:latest
+    container_name: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    ports:
+      - "9094:9094"   # 호스트에서 직접 접속용
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+
+  # ============================================================
+  # 3-2. Spark (standalone 클러스터 — master 1 + worker 2)
+  # ============================================================
+  spark-master:
+    image: apache/spark:latest
+    container_name: spark-master
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+      --host spark-master --port 7077 --webui-port 8080
+    ports:
+      - "7077:7077"   # spark-submit이 접속하는 master 포트
+      - "8081:8080"   # Spark Master Web UI
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+
+  spark-worker-1:
+    image: apache/spark:latest
+    container_name: spark-worker-1
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077 --cores 2 --memory 2g --webui-port 8081
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    volumes:
+      - spark_checkpoints:/opt/spark/checkpoints   # Structured Streaming checkpoint (driver+executor 공유)
+    ports:
+      - "8082:8081"   # Worker 1 Web UI
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+
+  spark-worker-2:
+    image: apache/spark:latest
+    container_name: spark-worker-2
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077 --cores 2 --memory 2g --webui-port 8081
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    volumes:
+      - spark_checkpoints:/opt/spark/checkpoints   # Structured Streaming checkpoint (driver+executor 공유)
+    ports:
+      - "8083:8081"   # Worker 2 Web UI
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+
+  # ============================================================
   # 4. Airflow 초기화 (최초 1회만 실행)
   # ============================================================
   airflow-init:
@@ -208,7 +304,9 @@ services:
       - ./plugins:/opt/airflow/plugins
       - ./scripts:/opt/airflow/scripts
       - ./logs:/opt/airflow/logs
+      - ./tests:/opt/airflow/tests                  # 테스트 (integration test 실행용)
       - /var/run/docker.sock:/var/run/docker.sock   # DockerOperator용 docker socket
+      - spark_checkpoints:/opt/spark/checkpoints    # Structured Streaming checkpoint (driver 쪽, worker와 동일 경로)
     healthcheck:
       test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $(hostname)"]
       interval: 30s
@@ -232,5 +330,7 @@ services:
 volumes:
   airflow_pg_data:
   analytics_pg_data:
-  analytics_pg_replica_data: 
+  analytics_pg_replica_data:
   minio_data:
+  kafka_data:
+  spark_checkpoints:
