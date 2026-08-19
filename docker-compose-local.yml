@@ -14,7 +14,7 @@ x-airflow-common: &airflow-common
   image: steam-airflow:latest   # pyspark 실행에 필요한 JDK 포함 커스텀 이미지
   environment: &airflow-common-env
     # 추가 패키지 설치 (컨테이너 기동 시 자동 pip install)
-    _PIP_ADDITIONAL_REQUIREMENTS: "polars pyarrow kiwipiepy apache-airflow-providers-docker pyspark kafka-python pytest"
+    _PIP_ADDITIONAL_REQUIREMENTS: "polars pyarrow kiwipiepy apache-airflow-providers-docker pyspark kafka-python pytest apache-airflow-providers-snowflake"
 
     # Airflow 기본 설정
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -45,6 +45,10 @@ x-airflow-common: &airflow-common
 
     # Kafka 브로커
     AIRFLOW_CONN_KAFKA_DEFAULT: kafka://kafka:9092
+
+    # Snowflake 커넥션
+    AIRFLOW_CONN_SNOWFLAKE_DEFAULT: >-
+      snowflake://${SNOWFLAKE_USER}:${SNOWFLAKE_PASSWORD}@${SNOWFLAKE_ACCOUNT}/${SNOWFLAKE_DATABASE}/${SNOWFLAKE_SCHEMA}?warehouse=${SNOWFLAKE_WAREHOUSE}&role=${SNOWFLAKE_ROLE}
 
   volumes:
     - ./dags:/opt/airflow/dags           # DAG 파일들
