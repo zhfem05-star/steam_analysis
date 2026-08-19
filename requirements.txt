@@ -8,3 +8,4 @@ kiwipiepy
 pytest
 pyspark
 kafka-python
+apache-airflow-providers-snowflake
