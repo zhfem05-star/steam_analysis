@@ -10,7 +10,7 @@
 |---------|------|------|--------|------|
 | `json` | int | ✅ | - | 1로 설정 (JSON 응답) |
 | `filter` | string | ❌ | all | recent: 최신순 / updated: 업데이트순 / all: 유용성순 |
-| `language` | string | ❌ | all | 언어 코드 (korean, english, all 등) |
+| `language` | string | ❌ | english | 언어 코드 (korean, english, all 등) |
 | `cursor` | string | ❌ | * | 페이지네이션 (첫 페이지는 "*") |
 | `num_per_page` | int | ❌ | 20 | 페이지당 리뷰 수 (최대 100) |
 | `review_type` | string | ❌ | all | all / positive / negative |
