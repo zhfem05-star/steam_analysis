@@ -15,7 +15,10 @@
 | `num_per_page` | int | ❌ | 20 | 페이지당 리뷰 수 (최대 100) |
 | `review_type` | string | ❌ | all | all / positive / negative |
 | `purchase_type` | string | ❌ | steam | all / steam / non_steam_purchase |
-| `day_range` | int | ❌ | - | 최근 N일 (최대 365, filter=all 전용) |
+| `day_range` | int | ❌ | - | 최근 N일 all / recent |
+| `date_range_type` | string | ❌ | include | 시작 날짜 파리미터와 종료 파라미터 포함 여부 |
+| `start_date` | int | ❌ | - | 수집할 리뷰 날짜 범위 파라미터. 인코딩된 값을 입력해야 함 (timestamp 사용) | 
+| `end_date` | int | ❌ | - | 수집할 리뷰 날짜 범위. 인코딩된 값을 입력해야 함 |
 
 ### 응답
 

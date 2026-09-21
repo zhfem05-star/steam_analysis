@@ -214,6 +214,9 @@ class SteamApiHook:
         start_cursor: str = "*",
         num_reviews: int | None = None,
         filter_type: str = "recent",
+        date_range_type: str | None = None,
+        start_date: int | None = None,
+        end_date: int | None = None,
     ) -> tuple[list[dict], str]:
         """
         단일 언어 리뷰 페이지네이션.
@@ -238,6 +241,9 @@ class SteamApiHook:
                 "num_per_page": 100 if remaining is None else min(100, remaining),
                 "cursor": cursor,
                 "purchase_type": "all",
+                "date_range_type": date_range_type,
+                "start_date" : start_date,
+                "end_date" : end_date,
             }
 
             try:
