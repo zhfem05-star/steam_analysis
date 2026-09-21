@@ -165,6 +165,9 @@ class SteamApiHook:
         num_reviews: int | None = None,
         languages: list[str] | None = None,
         filter_type: str = "recent",
+        date_range_type: str | None = None,
+        start_date: int | None = None,
+        end_date: int | None = None,
     ) -> tuple[list[dict], dict[str, str]]:
         """
         게임 리뷰 조회 (다국어 + cursor 기반 증분 수집)
@@ -173,6 +176,9 @@ class SteamApiHook:
                             None 또는 키 누락 시 해당 언어를 처음부터("*") 수집.
         :param num_reviews: 언어별 최대 수집 수. None이면 전체 수집.
         :param languages:   수집할 언어 목록. 기본값 ["korean", "english"]
+        :param date_range_type: 날짜 범위를 포함시킬지 여부에 대한 파라미터.
+        :param start_date: 수집 시작 날짜.
+        :param end_date: 수집 종료 날짜.
         :return: (중복 제거된 리뷰 리스트, 언어별 마지막 cursor 딕셔너리)
                  next_cursors는 tracked_games.review_cursors에 저장하여 다음 실행 시 재사용.
         """
@@ -193,6 +199,9 @@ class SteamApiHook:
                 start_cursor=start_cursor,
                 num_reviews=num_reviews,
                 filter_type=filter_type,
+                date_range_type=date_range_type,
+                start_date=start_date,
+                end_date=end_date,
             )
             next_cursors[language] = last_cursor
             for review in lang_reviews:
@@ -245,6 +254,17 @@ class SteamApiHook:
                 "start_date" : start_date,
                 "end_date" : end_date,
             }
+            if (start_date or end_date) and not params["date_range_type"]:
+                log.info(
+                    "date_range_type 미설정"
+                )
+            elif params["date_range_type"] and (params["start_date"] is None 
+                                                or params["end_date"] is None):
+                log.warning(
+                    # start_date나 end_date 파라미터 설정 안 했을 경우
+                    "현재 미설정 파라미터: %s, %s",
+                    start_date, end_date
+                )
 
             try:
                 data = self._request(url, params)

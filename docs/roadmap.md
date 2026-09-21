@@ -7,8 +7,8 @@ Bronze -> Silver -> Gold/Mart 순서로, 하위 레이어가 의존하는 순서
 ## ch1. Bronze - 수집 훅/오퍼레이터
 
 - [ ] `plugins/hooks/steam_api.py` - appreviews/appdetails 파라미터, 커서 페이지네이션 로직 검수
-  - [ ] `date_range_type`/`day_range`/`start_date`/`end_date` 반영 여부 (10만 건 커서 캡 우회용)
-  - [ ] `purchase_type`, `language` 기본값이 문서와 실제로 일치하는지
+  - [x] `date_range_type`/`day_range`/`start_date`/`end_date` 반영 여부 (10만 건 커서 캡 우회용)
+  - [x] `purchase_type`, `language` 기본값이 문서와 실제로 일치하는지
 - [ ] `plugins/hooks/s3_hook.py`
 - [ ] `plugins/hooks/kafka_hook.py`
 - [ ] `plugins/operators/steam_api_to_s3.py`
@@ -39,4 +39,4 @@ Bronze -> Silver -> Gold/Mart 순서로, 하위 레이어가 의존하는 순서
 - [ ] `plugins/hooks/snowflake_hook.py`, `plugins/hooks/spark_hook.py`
 - [ ] `plugins/callbacks/slack_callback.py`
 - [ ] DB 이중화/failover (`DB_FAILOVER_RUNBOOK.txt`, replica 설정)
-- [ ] `# Steam Store API review (비공식).txt` 문서 최신화 (이번에 확인한 실제 기본값 반영)
+- [x] `# Steam Store API review (비공식).txt` 문서 최신화 (이번에 확인한 실제 기본값 반영)
