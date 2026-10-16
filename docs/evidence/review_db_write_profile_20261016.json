@@ -1,0 +1,57 @@
+{
+  "measured_at_utc": "2026-10-16T11:59:53.844306+00:00",
+  "python": "3.10.13 (main, Feb 13 2024, 10:39:58) [GCC 12.2.0]",
+  "postgres": "PostgreSQL 15.15 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+  "packages": {
+    "psycopg2-binary": "2.9.9",
+    "apache-airflow": "2.8.1"
+  },
+  "script_sha256": "5ec87963d05b3869412500b9266ec3e79d18718cdadacb3302dca46168b460fe",
+  "input_sha256": "d4bba75987058b71067ee2ca6e372826616c5f0f62ef269d7ea0bee566578f3c",
+  "rows": 10000,
+  "repeats": 5,
+  "scope": "fresh TEMP table inserts and one commit; connection reused; no durable table WAL; excludes input generation, truncate and result validation",
+  "batch_page_size": 1000,
+  "results_verified": true,
+  "results": {
+    "execute_loop": {
+      "seconds": [
+        1.896336521000194,
+        1.9205485689999477,
+        2.028755490000094,
+        2.011255624000114,
+        1.8660741060000419
+      ],
+      "median_seconds": 1.9205485689999477,
+      "min_seconds": 1.8660741060000419,
+      "max_seconds": 2.028755490000094,
+      "rows_per_second_at_median": 5206.8456697281645
+    },
+    "executemany": {
+      "seconds": [
+        1.9279022279999936,
+        1.8676954990000922,
+        2.126001482999982,
+        2.041636977000053,
+        1.8709387190001507
+      ],
+      "median_seconds": 1.9279022279999936,
+      "min_seconds": 1.8676954990000922,
+      "max_seconds": 2.126001482999982,
+      "rows_per_second_at_median": 5186.985032106117
+    },
+    "execute_values": {
+      "seconds": [
+        0.2534016630002043,
+        0.25662395099993773,
+        0.2769676679999975,
+        0.25252471500016327,
+        0.24847428399993987
+      ],
+      "median_seconds": 0.2534016630002043,
+      "min_seconds": 0.24847428399993987,
+      "max_seconds": 0.2769676679999975,
+      "rows_per_second_at_median": 39463.04014584126
+    }
+  }
+}

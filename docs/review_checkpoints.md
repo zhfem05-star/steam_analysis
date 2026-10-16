@@ -98,6 +98,22 @@ docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python -m pyte
 docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python -m pytest --confcutdir=/opt/airflow/tests/offline /opt/airflow/tests/offline -q --junitxml=/opt/airflow/logs/review_offline_20261016.xml
 ```
 
+### 2026-10-16 실제 Steam 날짜 필터 소량 검증
+
+- 대상: `29ab342` 기반 작업 트리에서 `test_review_steam_live_integration.py` 추가. 운영 Hook·수집기 코드는 변경하지 않았다.
+- 환경: 위 Docker 런타임 검증과 같은 `airflow-scheduler` 컨테이너.
+- 조건: appid `730`(CS2), `english`, `filter=recent`, `purchase_type=all`, `date_range_type=include`.
+- 고정 요청 구간: 2026-10-15 12:00~12:10 UTC, 한국시간 21:00~21:10. Unix timestamp `[1792065600, 1792066200]`.
+- 결과: **1 passed, 0 skipped**. 실제 API에 2회 요청해 데이터 페이지 1개(3행)와 종료용 빈 응답을 받았다. 고유 ID 3개, 작성 시각 범위 `[1792065636, 1792066171]`, 최신순 정렬과 `completed=True`를 확인했다.
+- `SteamApiHook → ReviewCollector.pages()`를 실제 응답으로 실행했다. Kafka·DB에 리뷰를 발행하거나 기존 체크포인트를 갱신하지 않았다.
+- 외부 API 테스트는 `RUN_STEAM_LIVE_TEST=1`일 때만 실행한다. 기본 실행에서는 건너뛴다. API가 과거 응답을 변경할 수 있으므로 건수 3은 이번 관측값이며 재실행의 고정 기대값은 아니다.
+- 독립적인 정답 ID 집합과의 비교, 날짜 경계의 정확한 포함 여부, 실제 다중 날짜 구간 전환, 10만 건 한계 우회, 컨테이너 재시작을 검증한 결과는 아니다.
+- 결과 원본: [실제 Steam JUnit XML](../logs/review_steam_live_20261016.xml). 로컬 `logs/` 파일이므로 제출 증빙으로 사용할 때 별도 보관한다.
+
+```sh
+docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins RUN_STEAM_LIVE_TEST=1 python -m pytest /opt/airflow/tests/integration/operators/test_review_steam_live_integration.py -m integration -v -s -rs -o junit_family=legacy --junitxml=/opt/airflow/logs/review_steam_live_20261016.xml
+```
+
 ## 집에서 적용할 순서
 
 1. 관련 DAG를 pause하고 실행 중인 수집 작업을 종료한 뒤 `tracked_games`의 appid/review_cursors/reviews_collected_at을 백업한다.
