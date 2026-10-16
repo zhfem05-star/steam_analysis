@@ -27,6 +27,7 @@ with DAG(
     schedule="0 8 * * *",      # 매일 08:00 UTC (한국시간 오후 5시)
     start_date=datetime(2025, 1, 1),
     catchup=False,
+    max_active_runs=1,
     tags=["steam", "extract"],
     default_args={"on_failure_callback": slack_fail_alert},
 ) as dag:
@@ -34,6 +35,12 @@ with DAG(
     collect_reviews = SteamReviewsToKafkaOperator(
         task_id="collect_reviews",
         kafka_topic="steam-reviews",
+        collection_mode="continuous",
+        filter_type="recent",
+        date_range_type="include",
+        start_date=946684800,  # 2000-01-01 UTC. 시작 시각 0은 Steam 날짜 필터를 무시할 수 있어 사용하지 않는다.
+        window_days=30,
+        incremental_overlap_seconds=86400,
         # app_ids=[730],  # 730, 570, 1623730 CS2, Dota2, palworld. 테스트용으로 소수 지정. 전체 수집 시 UpsertTrackedGamesOperator에서 app_id 리스트를 XCom으로 받아 사용.
         # app_id_limit : 수집할 게임 수 제한. 테스트 시 소수 지정, 전체 수집 시 None
         # app_id_limit=5,
@@ -43,6 +50,7 @@ with DAG(
 
     publish_reviews_to_s3 = SparkReviewsKafkaToS3Operator(
         task_id="publish_reviews_to_s3",
+        trigger_rule="all_done",
         kafka_topic="steam-reviews",
         s3_key_prefix="reviews/{{ execution_date.strftime('%Y%m%d_%H%M') }}",
     )

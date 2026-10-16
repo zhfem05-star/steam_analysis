@@ -21,7 +21,6 @@ params = {
                 "purchase_type" : "all",
                 # "review_type" : "all",
                 "date_range_type": "include",
-                "day_range": "all",
                 "start_date" : start_date,
                 "end_date" : end_date,
                 "language": "all",

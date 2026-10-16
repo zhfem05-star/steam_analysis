@@ -2,14 +2,14 @@
 Bronze reviews parquet → Silver S3 파티셔닝 오퍼레이터
 
 S3 Bronze의 리뷰 parquet 청크 파일들을 읽어 변환한 뒤
-Silver 버킷에 appid / language / year / month 기준으로 파티셔닝하여 저장한다.
+Silver 버킷에 appid / language / year / month 기준으로 파티셔닝하여 저장
 
 Bronze 구조:  reviews/{YYYYMMDD_HHMM}/{appid}_chunk_{N:03d}.parquet
 Silver 구조:  reviews/appid={appid}/language={lang}/year={Y}/month={M}/{filename}.parquet
 
 파티션 키에 language를 포함하므로 경로만으로 언어 구분 가능:
-  - reviews/appid=730/language=korean/...
-  - reviews/appid=730/language=english/...
+  - reviews/appid=730/language=korean/
+  - reviews/appid=730/language=english/
 
 변환 내용:
   - author struct → 컬럼으로 펼치기 (author_steamid 등)
@@ -19,20 +19,27 @@ Silver 구조:  reviews/appid={appid}/language={lang}/year={Y}/month={M}/{filena
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from airflow.utils.context import Context
+
+import hashlib
+
 import polars as pl
 from airflow.models import BaseOperator
-
 from hooks.s3_hook import BUCKET_RAW, BUCKET_SILVER, SteamS3Hook
+from utils.review_dedup import deduplicate_reviews
 
 
 class SilverReviewsToS3Operator(BaseOperator):
     """
-    Bronze 리뷰 parquet → Silver S3 파티셔닝 저장.
+    Bronze 리뷰 parquet → Silver S3 파티셔닝 저장
 
     :param bronze_prefix:  읽을 Bronze S3 prefix
                            예: "reviews/{{ execution_date.strftime('%Y%m%d') }}"
     :param silver_prefix:  Silver 저장 루트 prefix (기본값: "reviews")
-    :param aws_conn_id:    Airflow S3 Connection ID
+    :param aws_conn_id:    Airflow에 등록한 S3 연결 ID
     """
 
     template_fields = ("bronze_prefix",)
@@ -42,14 +49,14 @@ class SilverReviewsToS3Operator(BaseOperator):
         bronze_prefix: str,
         silver_prefix: str = "reviews",
         aws_conn_id: str = "minio_s3",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.bronze_prefix = bronze_prefix
         self.silver_prefix = silver_prefix
         self.aws_conn_id = aws_conn_id
 
-    def execute(self, context):  # noqa: ARG002
+    def execute(self, context: Context) -> None:  # noqa: ARG002
         s3_hook = SteamS3Hook(aws_conn_id=self.aws_conn_id)
 
         keys = s3_hook.list_keys(prefix=self.bronze_prefix, bucket=BUCKET_RAW)
@@ -65,7 +72,7 @@ class SilverReviewsToS3Operator(BaseOperator):
             df = s3_hook.read_parquet(key=key, bucket=BUCKET_RAW)
             df = self._transform(df)
 
-            filename = key.split("/")[-1]  # {appid}_chunk_{N:03d}.parquet
+            filename = self._source_filename(key)  # {appid}_chunk_{N:03d}.parquet
 
             # appid + language + year + month 로 그룹화하여 파티션 경로에 저장
             for (appid_val, lang, year, month), group_df in df.group_by(
@@ -79,10 +86,16 @@ class SilverReviewsToS3Operator(BaseOperator):
                     f"{filename}"
                 )
 
-                s3_hook.upload_parquet(df=group_df, key=silver_key, bucket=BUCKET_SILVER)
+                s3_hook.upload_parquet(
+                    df=group_df, key=silver_key, bucket=BUCKET_SILVER
+                )
                 self.log.info(
                     "Silver 저장: appid=%s  language=%s  %d/%02d  리뷰=%d건",
-                    appid_val, lang, year, month, len(group_df),
+                    appid_val,
+                    lang,
+                    year,
+                    month,
+                    len(group_df),
                 )
 
             processed += 1
@@ -92,9 +105,16 @@ class SilverReviewsToS3Operator(BaseOperator):
     # ── 내부 메서드 ──────────────────────────────────────
 
     @staticmethod
+    def _source_filename(key: str) -> str:
+        # 같은 원본을 다시 처리하면 같은 파일명을 사용한다.
+        # 실행이 다른 원본은 청크 이름이 같아도 서로 덮어쓰지 않게 한다.
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        return f"{digest}_{key.rsplit('/', 1)[-1]}"
+
+    @staticmethod
     def _transform(df: pl.DataFrame) -> pl.DataFrame:
         """
-        Bronze 리뷰 DataFrame 변환.
+        Bronze 리뷰 DataFrame 변환
 
         1. author struct → 개별 컬럼으로 펼치기
         2. Unix timestamp → UTC datetime
@@ -119,20 +139,22 @@ class SilverReviewsToS3Operator(BaseOperator):
 
         # Steam API 언어 코드 정규화 (koreana → korean)
         if "language" in df.columns:
-            df = df.with_columns(
-                pl.col("language").replace("koreana", "korean")
-            )
+            df = df.with_columns(pl.col("language").replace("koreana", "korean"))
 
         # 파티션 컬럼: timestamp_created 기준 년·월
         if "timestamp_created" in df.columns:
-            df = df.with_columns([
-                pl.col("timestamp_created").dt.year().alias("review_year"),
-                pl.col("timestamp_created").dt.month().alias("review_month"),
-            ])
+            df = df.with_columns(
+                [
+                    pl.col("timestamp_created").dt.year().alias("review_year"),
+                    pl.col("timestamp_created").dt.month().alias("review_month"),
+                ]
+            )
         else:
-            df = df.with_columns([
-                pl.lit(0).alias("review_year"),
-                pl.lit(0).alias("review_month"),
-            ])
+            df = df.with_columns(
+                [
+                    pl.lit(0).alias("review_year"),
+                    pl.lit(0).alias("review_month"),
+                ]
+            )
 
-        return df
+        return deduplicate_reviews(df)

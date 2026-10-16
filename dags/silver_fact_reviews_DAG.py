@@ -22,11 +22,12 @@ with DAG(
     schedule="0 9 * * *",      # 매일 09:00 UTC (02번 Bronze DAG 완료 후)
     start_date=datetime(2025, 1, 1),
     catchup=False,
+    max_active_runs=1,
     tags=["steam", "silver", "fact", "reviews"],
     default_args={"on_failure_callback": slack_fail_alert},
 ) as dag:
 
     partition_reviews = SilverReviewsToS3Operator(
         task_id="partition_reviews",
-        bronze_prefix="reviews/{{ execution_date.strftime('%Y%m%d') }}",
+        bronze_prefix="reviews/",
     )

@@ -1,8 +1,8 @@
 """
 Steam API 통합 Hook
 
-Steam Web API(공식) 및 Store API(비공식) 호출을 담당한다.
-API key 관리, rate limit 대기, 페이지네이션을 한 곳에서 처리.
+Steam Web API(공식) 및 Store API(비공식) 호출을 담당한다
+API key 관리, rate limit 대기, 페이지네이션을 한 곳에서 처리
 """
 
 from __future__ import annotations
@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Iterator
 
 import requests
 from airflow.models import Variable
+from utils.review_types import ReviewRecord
 
 log = logging.getLogger(__name__)
 
@@ -28,13 +30,13 @@ class SteamApiHook:
     Steam API 통합 Hook
 
     공식/비공식 API를 메서드별로 제공하며,
-    rate limit·에러 처리·페이지네이션을 내부에서 처리한다.
+    rate limit·에러 처리·페이지네이션을 내부 처리
     """
 
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None) -> None:
         """
-        :param api_key: Steam Web API Key.
-                        None이면 Airflow Variable 'steam_api_key'에서 가져온다.
+        :param api_key: Steam Web API Key
+                        None이면 Airflow Variable 'steam_api_key'에서 조회
         """
         self._api_key = api_key
 
@@ -47,7 +49,9 @@ class SteamApiHook:
     # ── 내부 공통 메서드 ─────────────────────────────
 
     def _request(self, url: str, params: dict | None = None) -> dict:
-        """HTTP GET 요청 + 에러 로깅"""
+        """
+        HTTP GET 요청 + 에러 로깅
+        """
         params = params or {}
         log.info("Steam API 요청: %s  params=%s", url, params)
 
@@ -71,7 +75,9 @@ class SteamApiHook:
         return resp.json()
 
     def _wait(self, seconds: float = _RATE_LIMIT_SEC) -> None:
-        """Rate limit 대기"""
+        """
+        Rate limit 대기
+        """
         time.sleep(seconds)
 
     # ── 공식 API: IStoreService ───────────────────────
@@ -173,21 +179,21 @@ class SteamApiHook:
         게임 리뷰 조회 (다국어 + cursor 기반 증분 수집)
 
         :param cursors:     언어별 시작 cursor. {"korean": "AoJ...", "english": "AoJ..."}
-                            None 또는 키 누락 시 해당 언어를 처음부터("*") 수집.
-        :param num_reviews: 언어별 최대 수집 수. None이면 전체 수집.
+                            None 또는 키 누락 시 해당 언어를 처음부터("*") 수집
+        :param num_reviews: 언어별 최대 수집 수. None이면 전체 수집
         :param languages:   수집할 언어 목록. 기본값 ["korean", "english"]
-        :param date_range_type: 날짜 범위를 포함시킬지 여부에 대한 파라미터.
-        :param start_date: 수집 시작 날짜.
-        :param end_date: 수집 종료 날짜.
+        :param date_range_type: 날짜 범위를 포함시킬지 여부에 대한 파라미터
+        :param start_date: 수집 시작 날짜
+        :param end_date: 수집 종료 날짜
         :return: (중복 제거된 리뷰 리스트, 언어별 마지막 cursor 딕셔너리)
-                 next_cursors는 tracked_games.review_cursors에 저장하여 다음 실행 시 재사용.
+                 next_cursors는 tracked_games.review_cursors에 저장하여 다음 실행 시 재사용
         """
         if languages is None:
             languages = ["korean", "english"]
         if cursors is None:
             cursors = {}
 
-        seen_ids: set[int] = set()
+        seen_ids: set[str | int | None] = set()
         all_reviews: list[dict] = []
         next_cursors: dict[str, str] = {}
 
@@ -211,7 +217,10 @@ class SteamApiHook:
                     all_reviews.append(review)
             log.info(
                 "appid=%s language=%s 수집 완료: %d개 (전체 누적 %d개)",
-                appid, language, len(lang_reviews), len(all_reviews),
+                appid,
+                language,
+                len(lang_reviews),
+                len(all_reviews),
             )
 
         return all_reviews, next_cursors
@@ -228,10 +237,10 @@ class SteamApiHook:
         end_date: int | None = None,
     ) -> tuple[list[dict], str]:
         """
-        단일 언어 리뷰 페이지네이션.
+        단일 언어 리뷰 페이지네이션
 
         :return: (리뷰 리스트, 마지막으로 받은 cursor)
-                 cursor는 다음 실행의 start_cursor로 사용하여 이어서 수집 가능.
+                 cursor는 다음 실행의 start_cursor로 사용하여 이어서 수집 가능
         """
         url = f"{_BASE_URL_STORE}/appreviews/{appid}"
         reviews: list[dict] = []
@@ -251,19 +260,19 @@ class SteamApiHook:
                 "cursor": cursor,
                 "purchase_type": "all",
                 "date_range_type": date_range_type,
-                "start_date" : start_date,
-                "end_date" : end_date,
+                "start_date": start_date,
+                "end_date": end_date,
             }
             if (start_date or end_date) and not params["date_range_type"]:
-                log.info(
-                    "date_range_type 미설정"
-                )
-            elif params["date_range_type"] and (params["start_date"] is None 
-                                                or params["end_date"] is None):
+                log.info("date_range_type 미설정")
+            elif params["date_range_type"] and (
+                params["start_date"] is None or params["end_date"] is None
+            ):
                 log.warning(
                     # start_date나 end_date 파라미터 설정 안 했을 경우
                     "현재 미설정 파라미터: %s, %s",
-                    start_date, end_date
+                    start_date,
+                    end_date,
                 )
 
             try:
@@ -272,7 +281,10 @@ class SteamApiHook:
                 # 네트워크/타임아웃 오류 — 마지막으로 성공한 cursor까지만 반환
                 log.error(
                     "페이지 요청 실패, 수집 중단: appid=%s language=%s cursor=%s error=%s",
-                    appid, language, cursor, e,
+                    appid,
+                    language,
+                    cursor,
+                    e,
                 )
                 break
 
@@ -287,7 +299,9 @@ class SteamApiHook:
             reviews.extend(batch)
             last_cursor = data.get("cursor", cursor)
             cursor = last_cursor
-            log.info("리뷰 %d개 수신 (누적: %d, 언어=%s)", len(batch), len(reviews), language)
+            log.info(
+                "리뷰 %d개 수신 (누적: %d, 언어=%s)", len(batch), len(reviews), language
+            )
             self._wait()
 
         return reviews, last_cursor
@@ -298,13 +312,18 @@ class SteamApiHook:
         language: str,
         start_cursor: str = "*",
         filter_type: str = "recent",
-    ):
+        date_range_type: str | None = None,
+        start_date: int | None = None,
+        end_date: int | None = None,
+    ) -> Iterator[tuple[list[ReviewRecord], str]]:
         """
-        단일 언어 리뷰를 페이지 단위로 yield하는 제너레이터.
+        단일 언어 리뷰를 페이지 단위로 yield하는 제너레이터
 
-        rate limit 대기(sleep)를 yield 이후에 수행하므로,
-        호출 측에서 yield된 데이터를 처리하는 동안 대기 시간이 겹친다.
+        빈 날짜 구간을 포함해 모든 요청 전에 대기하여 호출 간격을 지킨다
 
+        :param date_range_type: 날짜 범위 적용 방식 ("include": 지정 범위 안의 리뷰 조회)
+        :param start_date: 수집 시작 시각 (초 단위 Unix timestamp)
+        :param end_date: 수집 종료 시각 (초 단위 Unix timestamp)
         :yield: (page_reviews: list[dict], next_cursor: str)
         """
         url = f"{_BASE_URL_STORE}/appreviews/{appid}"
@@ -319,41 +338,66 @@ class SteamApiHook:
                 "cursor": cursor,
                 "purchase_type": "all",
             }
+            params.update(
+                {
+                    key: value
+                    for key, value in {
+                        "date_range_type": date_range_type,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                    }.items()
+                    if value is not None
+                }
+            )
 
+            self._wait()  # 빈 날짜 구간이나 cursor 초기화 후에도 요청 간격을 지킨다.
             try:
                 data = self._request(url, params)
             except Exception as e:
                 log.error(
                     "페이지 요청 실패, 중단: appid=%s language=%s cursor=%s error=%s",
-                    appid, language, cursor, e,
+                    appid,
+                    language,
+                    cursor,
+                    e,
                 )
-                return
+                raise
 
             if data.get("success") != 1:
                 log.warning("리뷰 조회 실패: appid=%s language=%s", appid, language)
-                return
+                raise RuntimeError(
+                    f"Steam reviews failed: appid={appid} language={language}"
+                )
 
-            batch = data.get("reviews", [])
+            batch = data.get("reviews")
+            if not isinstance(batch, list):
+                raise ValueError("Steam reviews response has no valid reviews list")
             if not batch:
                 return
 
-            next_cursor = data.get("cursor", cursor)
-            log.info("페이지 수신: appid=%s language=%s 리뷰=%d개", appid, language, len(batch))
+            next_cursor = data.get("cursor")
+            if not next_cursor or next_cursor == cursor:
+                raise RuntimeError("Steam review cursor did not advance")
+            log.info(
+                "페이지 수신: appid=%s language=%s 리뷰=%d개",
+                appid,
+                language,
+                len(batch),
+            )
 
             yield batch, next_cursor  # consumer가 이 데이터를 처리하는 동안
 
             cursor = next_cursor
-            self._wait()              # rate limit 대기 — consumer 처리와 시간이 겹침
 
     def get_query(
-            self,
-            query_name: str = "",
-            start: int = 0,
-            count: int = 1000,
-            sort: int = 0,
-            filters: dict | None = None,
-            context: dict | None = None,
-            data_request: dict | None = None,
+        self,
+        query_name: str = "",
+        start: int = 0,
+        count: int = 1000,
+        sort: int = 0,
+        filters: dict | None = None,
+        context: dict | None = None,
+        data_request: dict | None = None,
     ) -> dict:
         """
         IStoreQueryService/Query/v1 호출

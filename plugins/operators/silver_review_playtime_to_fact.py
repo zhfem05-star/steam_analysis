@@ -3,43 +3,52 @@ Silver S3 reviews → fact_review_playtime_daily 일별 플레이타임 집계 �
 
 Silver S3의 리뷰 parquet을 app_id별로 읽어
 game / language / review_date 기준으로 일별 평균 플레이타임을 집계한 뒤
-fact_review_playtime_daily 테이블에 UPSERT한다.
+fact_review_playtime_daily 테이블에 UPSERT
 
 플레이타임 출처: author struct의 playtime_at_review, playtime_forever (분 단위)
-Silver 변환 시 author struct이 unnest되어 author_playtime_at_review 컬럼으로 저장됨.
+Silver 변환 시 author struct이 unnest되어 author_playtime_at_review 컬럼으로 저장됨
 """
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from airflow.utils.context import Context
+
 import polars as pl
 from airflow.models import BaseOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-
 from hooks.s3_hook import BUCKET_SILVER, SteamS3Hook
+from utils.review_dedup import deduplicate_reviews
 
 
 class SilverReviewPlaytimeToFactOperator(BaseOperator):
     """
-    Silver S3 리뷰 parquet → fact_review_playtime_daily UPSERT.
+    Silver S3 리뷰 parquet → fact_review_playtime_daily UPSERT
 
-    :param postgres_conn_id: Airflow Postgres Connection ID
-    :param aws_conn_id:      Airflow S3 Connection ID
+    :param postgres_conn_id: Airflow에 등록한 Postgres 연결 ID
+    :param aws_conn_id:      Airflow에 등록한 S3 연결 ID
     :param silver_prefix:    Silver S3 리뷰 루트 prefix (기본값: "reviews")
     """
+
+    # ── 연결 및 입력 경로 설정 ─────────────────────────────────
 
     def __init__(
         self,
         postgres_conn_id: str = "analytics_db",
         aws_conn_id: str = "minio_s3",
         silver_prefix: str = "reviews",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.postgres_conn_id = postgres_conn_id
         self.aws_conn_id = aws_conn_id
         self.silver_prefix = silver_prefix
 
-    def execute(self, context):  # noqa: ARG002
+    # ── 게임별 파일 조회 및 집계 실행 ──────────────────────────
+
+    def execute(self, context: Context) -> None:  # noqa: ARG002
         s3_hook = SteamS3Hook(aws_conn_id=self.aws_conn_id)
         pg_hook = PostgresHook(postgres_conn_id=self.postgres_conn_id)
 
@@ -50,13 +59,15 @@ class SilverReviewPlaytimeToFactOperator(BaseOperator):
         for app_id in app_ids:
             prefix = f"{self.silver_prefix}/appid={app_id}/"
             keys = s3_hook.list_keys(prefix=prefix, bucket=BUCKET_SILVER)
-            parquet_keys = [k for k in keys if k.endswith(".parquet")]
+            parquet_keys = sorted(k for k in keys if k.endswith(".parquet"))
 
             if not parquet_keys:
                 self.log.debug("Silver 리뷰 없음: appid=%s", app_id)
                 continue
 
-            dfs = [s3_hook.read_parquet(key=k, bucket=BUCKET_SILVER) for k in parquet_keys]
+            dfs = [
+                s3_hook.read_parquet(key=k, bucket=BUCKET_SILVER) for k in parquet_keys
+            ]
             df = pl.concat(dfs, how="diagonal_relaxed")
 
             rows = self._aggregate_daily(df, app_id)
@@ -69,7 +80,7 @@ class SilverReviewPlaytimeToFactOperator(BaseOperator):
 
         self.log.info("전체 완료: %d건", total_rows)
 
-    # ── 내부 메서드 ──────────────────────────────────────
+    # ── 수집 대상 조회 ─────────────────────────────────────────
 
     @staticmethod
     def _get_tracked_app_ids(pg_hook: PostgresHook) -> list[int]:
@@ -78,8 +89,10 @@ class SilverReviewPlaytimeToFactOperator(BaseOperator):
         )
         return [r[0] for r in rows]
 
+    # ── 리뷰 중복 제거 및 일별 집계 ─────────────────────────────
+
     @staticmethod
-    def _aggregate_daily(df: pl.DataFrame, app_id: int) -> list[dict]:
+    def _aggregate_daily(df: pl.DataFrame, app_id: int) -> list[dict[str, Any]]:
         required = {"timestamp_created", "language", "author_playtime_at_review"}
         if not required.issubset(df.columns):
             return []
@@ -91,32 +104,41 @@ class SilverReviewPlaytimeToFactOperator(BaseOperator):
                 .alias("timestamp_created")
             )
 
+        df = deduplicate_reviews(df, app_id=app_id)
+
         agg = (
-            df
-            .with_columns(
-                pl.col("timestamp_created").dt.date().alias("review_date")
-            )
+            df.with_columns(pl.col("timestamp_created").dt.date().alias("review_date"))
             .group_by(["language", "review_date"])
-            .agg([
-                pl.col("author_playtime_at_review").mean().round(2).alias("avg_playtime_at_review"),
-                pl.col("author_playtime_forever").mean().round(2).alias("avg_playtime_forever"),
-                pl.len().alias("review_count"),
-            ])
+            .agg(
+                [
+                    pl.col("author_playtime_at_review")
+                    .mean()
+                    .round(2)
+                    .alias("avg_playtime_at_review"),
+                    pl.col("author_playtime_forever")
+                    .mean()
+                    .round(2)
+                    .alias("avg_playtime_forever"),
+                    pl.len().alias("review_count"),
+                ]
+            )
         )
 
         return [
             {
-                "app_id":                app_id,
-                "language":              row["language"],
-                "review_date":           row["review_date"],
+                "app_id": app_id,
+                "language": row["language"],
+                "review_date": row["review_date"],
                 "avg_playtime_at_review": row["avg_playtime_at_review"],
-                "avg_playtime_forever":  row["avg_playtime_forever"],
-                "review_count":          row["review_count"],
+                "avg_playtime_forever": row["avg_playtime_forever"],
+                "review_count": row["review_count"],
             }
             for row in agg.to_dicts()
         ]
 
-    def _upsert(self, pg_hook: PostgresHook, rows: list[dict]) -> None:
+    # ── DB 집계 교체 ───────────────────────────────────────────
+
+    def _upsert(self, pg_hook: PostgresHook, rows: list[dict[str, Any]]) -> None:
         sql = """
             INSERT INTO fact_review_playtime_daily (
                 app_id, language, review_date,
@@ -134,4 +156,11 @@ class SilverReviewPlaytimeToFactOperator(BaseOperator):
         conn = pg_hook.get_conn()
         with conn:
             with conn.cursor() as cur:
+                # 앱의 집계 전체를 한 트랜잭션에서 교체한다.
+                # 리뷰의 언어나 날짜가 바뀌어도 예전 그룹의 집계가 남지 않게 한다.
+                for app_id in {row["app_id"] for row in rows}:
+                    cur.execute(
+                        "DELETE FROM fact_review_playtime_daily WHERE app_id = %s",
+                        (app_id,),
+                    )
                 cur.executemany(sql, rows)

@@ -16,6 +16,7 @@
 -- review_cursors       : 언어별 Steam 리뷰 페이지네이션 커서 {"korean": "...", "english": "..."}
 --                        {}(빈 객체)이면 다음 수집 시 처음("*")부터 전체 수집
 
+-- review_cursors의 JSON 체크포인트 구조와 적용 절차: docs/review_checkpoints.md
 CREATE TABLE IF NOT EXISTS tracked_games (
     appid                INTEGER  PRIMARY KEY,
     first_seen           DATE     NOT NULL,
