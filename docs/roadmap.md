@@ -51,6 +51,7 @@ Bronze -> Silver -> Gold/Mart 순서로, 하위 레이어가 의존하는 순서
 - [x] Silver source-key identity to avoid overwriting different collection runs.
 - [x] Production DAG wiring and service-free pytest verification.
 - [x] Small Steam probe: positive start_date works; zero can disable date filtering.
+- [x] 2026-10-16 Docker: fixed-input Kafka/Postgres checkpoint integration and Kafka/Spark/MinIO multi-batch delivery (2 passed); offline suite in the same container (40 passed). See [runtime evidence](review_checkpoints.md#2026-10-16-docker-런타임-검증).
 - [ ] Real Postgres/Kafka/Spark/MinIO restart and failure integration tests.
 - [ ] Real collection beyond 100,000 reviews; compare distinct IDs and boundary timestamps.
 - [ ] Verify broker retention covers backfill duration and benchmark full-history Silver scans.

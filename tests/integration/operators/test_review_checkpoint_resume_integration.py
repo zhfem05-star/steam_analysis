@@ -3,17 +3,27 @@ import json
 import random
 from unittest.mock import MagicMock
 import pytest
+from airflow.providers.postgres.hooks.postgres import PostgresHook
 from hooks.kafka_hook import SteamKafkaHook
 from operators.steam_reviews_to_kafka import SteamReviewsToKafkaOperator
 
 pytestmark = pytest.mark.integration
 
 
-def test_checkpoint_resume_and_incremental_watermark(pg_hook):
+def test_checkpoint_resume_and_incremental_watermark(
+    pg_hook: PostgresHook, test_kafka_topic: str
+) -> None:
     appid = random.randint(100_000_000, 999_999_999)
     pg_hook.run("INSERT INTO tracked_games(appid,first_seen,last_discounted) VALUES (%s,CURRENT_DATE,CURRENT_DATE)",parameters=(appid,))
-    op=SteamReviewsToKafkaOperator(task_id="resume",app_ids=[appid],languages=["english"],
-        collection_mode="continuous",date_range_type="include",start_date=1)
+    op = SteamReviewsToKafkaOperator(
+        task_id="resume",
+        kafka_topic=test_kafka_topic,
+        app_ids=[appid],
+        languages=["english"],
+        collection_mode="continuous",
+        date_range_type="include",
+        start_date=1,
+    )
     op._run_end=100
     api=MagicMock()
     def failing(**kwargs):

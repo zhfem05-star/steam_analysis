@@ -8,24 +8,21 @@ MinIO에 정확히 저장하는지, 전체 경로를 mock 없이 검증한다.
 Steam API 호출만 mock하고(고정된 리뷰 2건), Kafka·Spark·MinIO·Postgres는
 전부 실제 서비스를 사용한다.
 
-주의: steam-reviews 토픽은 실제 운영 DAG도 같이 쓰는 공유 토픽이고,
-Spark 쪽에서 startingOffsets=earliest로 전체 이력을 다시 읽는 구조라
-- appid는 매 실행마다 랜덤하게 생성해서 이전 테스트/운영 데이터와 절대
-  충돌하지 않게 한다 (겹치면 assert 카운트가 어긋남).
-- 토픽이 계속 쌓일수록 매 실행마다 전체 이력을 다시 스캔하므로 실행 시간이
-  점점 길어질 수 있다 (이 프로젝트 규모에서는 감내 가능한 수준으로 판단).
+테스트 전용 Kafka 토픽·S3 prefix·Spark 체크포인트를 사용하고 종료 시 정리
+배치당 1개 메시지를 읽어 여러 청크에 걸친 저장 결과 검증
 
 실행 방법 (airflow-scheduler 컨테이너 안에서, pyspark/JDK/kafka-python 필요):
-    docker exec airflow-scheduler pytest /opt/airflow/tests/integration -m integration -v
+    docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python -m pytest /opt/airflow/tests/integration -m integration -v
 """
 
 import random
 import shutil
 from unittest.mock import MagicMock, patch
 
+import polars as pl
 import pytest
 
-from hooks.s3_hook import BUCKET_RAW
+from hooks.s3_hook import BUCKET_RAW, SteamS3Hook
 from operators.spark_reviews_kafka_to_s3 import SparkReviewsKafkaToS3Operator
 from operators.steam_reviews_to_kafka import SteamReviewsToKafkaOperator
 
@@ -38,7 +35,9 @@ def _fake_ti():
     return ti
 
 
-def test_review_flows_from_kafka_producer_to_s3_via_spark(s3_hook, test_s3_prefix):
+def test_review_flows_from_kafka_producer_to_s3_via_spark(
+    s3_hook: SteamS3Hook, test_s3_prefix: str, test_kafka_topic: str
+) -> None:
     # 실제 운영 데이터·이전 테스트 잔여 메시지와 절대 겹치지 않게 매번 새 appid 사용
     test_appid = random.randint(100_000_000, 999_999_999)
 
@@ -56,7 +55,7 @@ def test_review_flows_from_kafka_producer_to_s3_via_spark(s3_hook, test_s3_prefi
          patch("operators.steam_reviews_to_kafka.slack_collect_summary"):
         producer = SteamReviewsToKafkaOperator(
             task_id="produce",
-            kafka_topic="steam-reviews",
+            kafka_topic=test_kafka_topic,
             app_ids=[test_appid],
             languages=["korean"],
         )
@@ -66,18 +65,25 @@ def test_review_flows_from_kafka_producer_to_s3_via_spark(s3_hook, test_s3_prefi
     checkpoint_path = f"/opt/spark/checkpoints/{test_s3_prefix.split('/')[-1]}"
     consumer = SparkReviewsKafkaToS3Operator(
         task_id="consume",
-        kafka_topic="steam-reviews",
+        kafka_topic=test_kafka_topic,
         s3_key_prefix=test_s3_prefix,
         checkpoint_path=checkpoint_path,
+        max_offsets_per_trigger=1,
     )
     try:
         consumer.execute({})
 
         # 3) 검증: 실제로 MinIO에 저장됐는지 + 내용이 정확한지
-        key = f"{test_s3_prefix}/{test_appid}_chunk_000.parquet"
-        assert s3_hook.key_exists(key=key, bucket=BUCKET_RAW)
-
-        df = s3_hook.read_parquet(key=key, bucket=BUCKET_RAW)
+        keys = sorted(
+            key
+            for key in s3_hook.list_keys(prefix=test_s3_prefix, bucket=BUCKET_RAW)
+            if key.rsplit("/", 1)[-1].startswith(f"{test_appid}_chunk_")
+            and key.endswith(".parquet")
+        )
+        assert len(keys) == 2, f"배치별 청크 2개가 필요합니다: keys={keys}"
+        df = pl.concat(
+            [s3_hook.read_parquet(key=key, bucket=BUCKET_RAW) for key in keys]
+        )
         assert df.shape[0] == 2
         assert set(df["recommendationid"]) == {"1", "2"}
         assert df["appid"][0] == test_appid

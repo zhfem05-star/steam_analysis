@@ -8,13 +8,16 @@ AIRFLOW_CONN_* 환경변수와 컨테이너 내부 호스트명(kafka:9092,
 spark-master:7077, minio:9000 등)을 그대로 쓸 수 있다.
 
 실행 방법:
-    docker exec airflow-scheduler pytest /opt/airflow/tests/integration -m integration -v
+    docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python -m pytest /opt/airflow/tests/integration -m integration -v
 """
 
 import uuid
+from collections.abc import Iterator
 
 import pytest
+from airflow.hooks.base import BaseHook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+from kafka.admin import KafkaAdminClient, NewTopic
 
 from hooks.s3_hook import BUCKET_RAW, SteamS3Hook
 
@@ -42,6 +45,22 @@ def s3_hook():
 @pytest.fixture
 def pg_hook():
     return PostgresHook(postgres_conn_id="analytics_db")
+
+
+@pytest.fixture
+def test_kafka_topic() -> Iterator[str]:
+    """운영 리뷰와 섞이지 않는 테스트 전용 토픽 생성 및 정리"""
+    conn = BaseHook.get_connection("kafka_default")
+    admin = KafkaAdminClient(bootstrap_servers=f"{conn.host}:{conn.port}")
+    topic = f"integration-test-{uuid.uuid4().hex}"
+    try:
+        admin.create_topics([NewTopic(topic, num_partitions=1, replication_factor=1)])
+        try:
+            yield topic
+        finally:
+            admin.delete_topics([topic])
+    finally:
+        admin.close()
 
 
 @pytest.fixture
