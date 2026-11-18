@@ -4,8 +4,6 @@ apache-airflow-providers-docker
 apache-airflow-providers-postgres
 polars
 pyarrow
-kiwipiepy
 pytest
-pyspark
 kafka-python
 apache-airflow-providers-snowflake

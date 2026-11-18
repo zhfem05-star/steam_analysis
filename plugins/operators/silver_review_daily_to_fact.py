@@ -53,7 +53,7 @@ class SilverReviewDailyToFactOperator(BaseOperator):
     def __init__(
         self,
         postgres_conn_id: str = "analytics_db",
-        aws_conn_id: str = "minio_s3",
+        aws_conn_id: str = "s3_storage",
         silver_prefix: str = "reviews",
         **kwargs: Any,
     ) -> None:

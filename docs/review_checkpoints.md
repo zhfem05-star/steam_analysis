@@ -48,7 +48,7 @@ Bronze는 경계 중복과 재시도 중복을 보존한다. 수집한 리뷰 ID
 3. 예전 파일처럼 수집 시각이 없으면 정렬된 원본 파일 순서를 사용한다.
 4. ID가 없거나 비어 있으면 조용히 합치지 않고 실패한다.
 
-Silver 변환에서는 청크 내부 중복을 제거한다. 일별 건수·플레이타임·Gold 형태소 집계에서는 해당 앱의 파일들을 합친 뒤 파일과 실행을 가로질러 중복 제거한다. 언어가 바뀐 리뷰도 최신본을 선택한 후 언어별로 나눈다. 기존에 사라진 그룹이나 단어가 남지 않도록 집계 교체는 DB 트랜잭션 안에서 수행한다.
+Silver 변환에서는 청크 내부 중복을 제거한다. 일별 건수·플레이타임 집계에서는 해당 앱의 파일들을 합친 뒤 파일과 실행을 가로질러 중복 제거한다. 언어가 바뀐 리뷰도 최신본을 선택한 후 언어별로 나눈다. 기존에 사라진 그룹이나 단어가 남지 않도록 집계 교체는 DB 트랜잭션 안에서 수행한다.
 
 Silver 파일명에는 전체 Bronze 원본 키의 해시를 넣는다. 다른 실행의 같은 청크 번호가 서로 덮어쓰지 않고, 같은 원본 재처리는 같은 키에 저장된다. 과거 이름의 파일은 자동 삭제하지 않는다. 집계 시 새 파일과 함께 ID로 중복 제거한다.
 
@@ -59,8 +59,8 @@ Silver 파일명에는 전체 Bronze 원본 키의 해시를 넣는다. 다른 �
 - 페이지 기준 1,000건마다, 구간 전환·완료 시, 종료 시 체크포인트를 저장한다.
 - 전송 후 DB 저장 전에 중단되면 중복 발행은 가능하다. 정확히 한 번 전송을 보장하는 구조는 아니다.
 - 앱별로 Kafka hook을 분리하며, 일부 앱 실패도 수집 task 실패로 처리한다.
-- Bronze DAG는 `max_active_runs=1`이다. 수집 task가 실패해도 `all_done`으로 Kafka→Bronze task를 실행해 이미 발행한 데이터를 처리한다.
-- Spark는 트리거당 최대 10,000개 offset을 읽도록 설정했다. 대량 backfill을 한 번에 driver 메모리로 모으는 것을 줄인다. [Spark 공식 옵션](https://spark.apache.org/docs/latest/structured-streaming-kafka-integration.html)
+- Bronze DAG는 `max_active_runs=1`이다.
+- 2026-11 Spark consumer 제거로 현재 DAG에는 Kafka→Bronze task가 없다. 이전에는 수집 task가 실패해도 `all_done`으로 consumer를 실행해 이미 발행한 데이터를 처리했고, Spark가 트리거당 최대 10,000개 offset을 읽었다. 새 consumer는 [재구성 계획](pipeline_plan.md) 2단계에서 추가한다.
 - Silver DAG는 `reviews/` 전체를 조회한다. 지연된 Bronze 파일을 날짜별 실행 prefix 때문에 놓치지 않게 한다. 현재는 전체 조회·재처리 비용이 발생하므로 향후 원본 처리 목록을 관리하는 최적화가 필요하다.
 
 ## 확인한 범위
@@ -77,6 +77,8 @@ Silver 파일명에는 전체 Bronze 원본 키의 해시를 넣는다. 다른 �
 테스트 환경: Python 3.12, pytest 9.1.1, Polars 2.0.0, kafka-python 3.0.11. 운영 환경 의존성과의 통합 확인은 별도로 필요하다.
 
 ### 2026-10-16 Docker 런타임 검증
+
+> 당시 코드 기준 기록이다. 아래 Kafka → Spark → MinIO 적재 통합 테스트(`test_reviews_kafka_to_s3_integration.py`)와 형태소 오프라인 테스트 3개는 2026-11 재구성에서 삭제했다. 현재 오프라인 테스트는 37개다.
 
 - 대상: `1c2fa66` 기반 작업 트리. 통합 테스트에 전용 Kafka 토픽 격리와 다중 청크 검증을 추가한 상태이며 아직 커밋하지 않았다. 운영 Hook·Operator·DAG 코드는 변경하지 않았다.
 - 환경: `airflow-scheduler` 컨테이너, Python 3.10.13, Airflow 2.8.1, pytest 9.1.1, Polars 1.43.2, kafka-python 3.0.11, PySpark 4.2.0.

@@ -48,7 +48,7 @@ class SilverReviewsToS3Operator(BaseOperator):
         self,
         bronze_prefix: str,
         silver_prefix: str = "reviews",
-        aws_conn_id: str = "minio_s3",
+        aws_conn_id: str = "s3_storage",
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)

@@ -3,7 +3,7 @@ Steam 앱 상세 정보 수집 DAG
 
 tracked_games 컨트롤 테이블에서 app_id를 조회하여
 appdetails API에서 게임 메타데이터(이름·장르·플랫폼·개발사 등)를 수집하고
-MinIO(S3) steam-raw 버킷에 Parquet 형태로 저장한다.
+S3 저장소 steam-raw 버킷에 Parquet 형태로 저장한다.
 
 저장 경로: appdetails/{YYYYMMDD_HHMM}/{appid}.parquet
 """
@@ -18,7 +18,7 @@ from operators.steam_app_details_to_s3 import SteamAppDetailsToS3Operator
 
 with DAG(
     dag_id="steam_bronze_04_app_details_extract",
-    description="Steam appdetails API → MinIO(steam-raw) 게임 메타데이터 수집 (장르·플랫폼·개발사 등)",
+    description="Steam appdetails API → S3(steam-raw) 게임 메타데이터 수집 (장르·플랫폼·개발사 등)",
     schedule="0 9 * * *",      # 매일 09:00 UTC (01번 DAG 완료 후)
     start_date=datetime(2025, 1, 1),
     catchup=False,

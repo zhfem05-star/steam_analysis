@@ -1,4 +1,4 @@
-# VPC 내부 통신 전부 허용 (Kafka broker간, Spark driver-executor간, Airflow-DB간 통신 등)
+# VPC 내부 통신 전부 허용 (Kafka broker간, Airflow-DB간 통신 등)
 resource "google_compute_firewall" "allow_internal" {
   name    = "steam-analysis-${var.environment}-allow-internal"
   network = google_compute_network.vpc.name

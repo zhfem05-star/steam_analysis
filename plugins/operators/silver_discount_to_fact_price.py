@@ -45,7 +45,7 @@ class SilverDiscountToFactPriceOperator(BaseOperator):
         collected_at: str = "{{ ds }}",
         postgres_conn_id: str = "analytics_db",
         s3_bucket: str = BUCKET_RAW,
-        aws_conn_id: str = "minio_s3",
+        aws_conn_id: str = "s3_storage",
         **kwargs,
     ):
         super().__init__(**kwargs)

@@ -2,7 +2,7 @@
 Steam 동접자 수 수집 → S3 저장 오퍼레이터
 
 tracked_games 컨트롤 테이블에서 is_active=TRUE, collect_players=TRUE인
-app_id 목록을 조회하여 동접자 수를 수집하고 MinIO(S3)에 저장한다.
+app_id 목록을 조회하여 동접자 수를 수집하고 S3 저장소에 저장한다.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class SteamPlayersToS3Operator(BaseOperator):
         s3_key: str,
         postgres_conn_id: str = "analytics_db",
         s3_bucket: str = BUCKET_RAW,
-        aws_conn_id: str = "minio_s3",
+        aws_conn_id: str = "s3_storage",
         **kwargs,
     ):
         super().__init__(**kwargs)

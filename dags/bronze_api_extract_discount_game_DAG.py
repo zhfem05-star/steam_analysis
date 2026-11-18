@@ -1,7 +1,7 @@
 """
 Steam 원본 데이터 수집 DAG
 할인된 게임의 APP_ID를 먼저 수집하여 이후 수집할 게임 데이터 범위를 지정
-Steam API에서 데이터를 수집하여 MinIO(S3) steam-raw 버킷에 저장한다.
+Steam API에서 데이터를 수집하여 S3 저장소 steam-raw 버킷에 저장한다.
 """
 
 from datetime import datetime
@@ -26,7 +26,7 @@ def _extract_app_ids(**context):
 
 with DAG(
     dag_id="steam_bronze_01_discount_game_extract",
-    description="Steam API → MinIO(steam-raw) 할인 게임 원본 데이터 수집",
+    description="Steam API → S3(steam-raw) 할인 게임 원본 데이터 수집",
     schedule="0 8 * * *",      # 매일 08:00 UTC (한국시간 오후 5시)
     start_date=datetime(2025, 1, 1),
     catchup=False,

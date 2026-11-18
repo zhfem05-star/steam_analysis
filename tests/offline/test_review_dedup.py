@@ -5,7 +5,6 @@ from utils.review_dedup import deduplicate_reviews
 from operators.silver_reviews_to_s3 import SilverReviewsToS3Operator
 from operators.silver_review_daily_to_fact import SilverReviewDailyToFactOperator
 from operators.silver_review_playtime_to_fact import SilverReviewPlaytimeToFactOperator
-from operators.gold_reviews_to_morphemes import GoldReviewsToMorphemesOperator
 
 
 def data():
@@ -61,31 +60,6 @@ def test_silver_transform_deduplicates_and_keeps_identity():
     transformed=SilverReviewsToS3Operator._transform(data())
     assert transformed.height == 2
     assert set(transformed["recommendationid"]) == {"a","b"}
-
-
-def test_gold_deduplicates_across_files_before_tokenization():
-    hook=MagicMock();hook.read_parquet.side_effect=[data(),data()]
-    op=GoldReviewsToMorphemesOperator(task_id="gold")
-    freq,appearances,_,_=op._analyze(hook,["a.parquet","b.parquet"],"english",None)
-    assert freq["excellent"] == 2
-    assert appearances["music"] == 2
-    assert freq["beautiful"] == 0
-
-
-def test_changed_language_does_not_count_old_snapshot_in_gold():
-    frame=pl.concat([data().head(1),data().head(1).with_columns(
-        pl.lit("korean").alias("language"),pl.lit(300).alias("timestamp_updated"))],how="diagonal_relaxed")
-    hook=MagicMock();hook.read_parquet.return_value=frame
-    op=GoldReviewsToMorphemesOperator(task_id="gold_language")
-    freq,_,_,_=op._analyze(hook,["a"],"english",None)
-    assert not freq
-
-
-def test_missing_korean_analyzer_cannot_erase_existing_aggregates():
-    hook=MagicMock();hook.read_parquet.return_value=data().with_columns(pl.lit("korean").alias("language"))
-    op=GoldReviewsToMorphemesOperator(task_id="missing_analyzer")
-    with pytest.raises(RuntimeError,match="한국어 분석기를 사용할 수 없어"):
-        op._analyze(hook,["a"],"korean",None)
 
 
 def test_aggregate_replacement_uses_same_transaction():

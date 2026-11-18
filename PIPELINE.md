@@ -1,5 +1,7 @@
 # Steam 데이터 파이프라인 구조
 
+> 2026-11 재구성 진행 중인 현재 코드 기준 설명이다. 형태소 파이프라인과 Spark는 제거했고, 로컬 S3 저장소는 MinIO에서 SeaweedFS로 교체했다(Airflow 연결 ID `s3_storage`). 목표 구조와 진행 순서는 [재구성 계획](docs/pipeline_plan.md)을 따른다.
+
 ## 전체 흐름
 
 ```
@@ -16,10 +18,10 @@ Steam API
 | 레이어 | 저장소 | 데이터 |
 |--------|--------|--------|
 | **Bronze** | `S3 steam-raw` | 원시 JSON/Parquet (할인게임 목록, 리뷰 청크, 동접자 수, 앱 상세) |
-| **Bronze (리뷰 중간 단계)** | `Kafka (steam-reviews 토픽)` | producer가 발행한 원시 리뷰 메시지. Spark가 소비할 때까지만 존재하는 임시 저장소 (영구 보관소 아님) |
+| **Bronze (리뷰 중간 단계)** | `Kafka (steam-reviews 토픽)` | producer가 발행한 원시 리뷰 메시지. consumer가 S3로 옮길 때까지 보관하는 버퍼 (영구 보관소 아님). consumer는 재구성 2단계에서 추가 |
 | **Silver** | `S3 steam-silver` | 정제된 리뷰 Parquet (언어·월별 파티셔닝) |
 | **Silver** | `PostgreSQL` | `dim_games`, `dim_genres`, `dim_game_genres`, `fact_price_history`, `fact_concurrent_players`, `fact_review_daily` |
-| **Gold** | `PostgreSQL` | `gold_review_morphemes` (형태소 빈도), `mart_*` (dbt 마트 테이블) |
+| **Gold** | `PostgreSQL` | `mart_*` (dbt 마트 테이블) |
 
 ### PostgreSQL 테이블 전체 목록
 
@@ -38,7 +40,6 @@ Steam API
   fact_review_daily            ← 언어·날짜별 리뷰 작성 수 집계
 
 [Gold]
-  gold_review_morphemes        ← 게임·언어별 형태소 빈도 (워드클라우드용)
   mart_game_overview           ← 게임 종합 정보 (dim + 최신 가격 + 장르)
   mart_player_daily_avg        ← 동접자 일평균
   mart_discount_analysis       ← 할인율 이력 집계
@@ -47,6 +48,8 @@ Steam API
 ```
 
 ### S3 버킷 구조
+
+로컬은 SeaweedFS S3 API(`http://seaweedfs:8333`), 운영은 AWS S3를 같은 경로로 사용한다.
 
 ```
 steam-raw/                              ← Bronze 원시 데이터
@@ -98,15 +101,14 @@ best_purchase_option.active_discounts[].discount_end_date
 
 **스케줄:** 매일 08:00 UTC
 
-producer(Kafka 발행)와 consumer(S3 저장)가 별도 task로 분리되어 있다.
-기존에는 in-memory `queue.Queue`로 두 역할을 한 task 안에서 이어붙였는데,
-그 연결을 실제 MQ인 Kafka로 대체한 구조다. 저장 결과물(S3 경로·형식)은
-기존과 동일하므로 하위 파이프라인(Silver 이후)은 이 변경을 몰라도 된다.
+producer(Kafka 발행)와 consumer(S3 저장)를 별도 task로 분리하는 구조다.
+기존 consumer였던 Spark Structured Streaming task는 2026-11에 제거했고,
+Airflow task 기반 consumer를 재구성 2단계에서 추가한다. 현재 DAG에는 producer만 있어
+리뷰 메시지는 Kafka 토픽에만 남는다.
 
 | Task | 오퍼레이터 | 설명 | 출력 |
 |------|-----------|------|------|
 | `collect_reviews` | `SteamReviewsToKafkaOperator` (producer) | `tracked_games`의 is_active=TRUE, collect_reviews=TRUE 게임 대상으로 한국어·영어 리뷰 증분 수집 → Kafka 발행 | `Kafka: steam-reviews` 토픽 |
-| `publish_reviews_to_s3` | `SparkReviewsKafkaToS3Operator` (consumer) | Spark Structured Streaming이 `steam-reviews` 토픽을 소비하여 appid별로 청크 저장 | `S3: reviews/{YYYYMMDD_HHMM}/{appid}_chunk_{N:03d}.parquet` |
 
 **수집 필드:**
 ```
@@ -121,10 +123,9 @@ written_during_early_access, appid (추가)
 - 리뷰 1건마다 Kafka 메시지로 즉시 발행 (key: appid)
 - 1000건 발행마다(또는 완료 시) `tracked_games.reviews_collected_at`·cursor 체크포인트 갱신
 
-**consumer 방식 (`publish_reviews_to_s3`):**
-- Spark standalone 클러스터(master 1 + worker 2)에서 실행
-- `trigger(availableNow=True)`로 동작 — 실행 시점까지 Kafka에 쌓인 메시지를 전부 처리하고 종료 (상시 스트리밍 서비스 아님, Airflow task의 start→finish 생명주기에 맞춤)
-- appid별로 묶어서 배치당 청크 파일 1개씩 생성, 실제 S3 업로드는 기존 `SteamS3Hook`(boto3/Polars) 재사용
+**consumer 방식 (재구성 2단계 예정):**
+- Airflow task가 실행 시점까지 쌓인 메시지를 끝까지 읽고 parquet로 S3에 저장한 뒤 offset commit
+- at-least-once 전달, 중복은 Silver에서 `(appid, recommendationid)` 기준으로 제거
 
 **Silver 연결:** → `steam_silver_03_fact_reviews` (S3 silver 파티셔닝)
 
@@ -230,37 +231,17 @@ recommendations_total, collected_at
 - `timestamp_created` 기준으로 날짜 집계 (UTC)
 - 한국어(`korean`) / 영어(`english`) 각각 별도 행으로 저장
 
-**Gold 연결:** → `steam_gold_01_review_morphemes`, `steam_gold_02_dbt_marts`
+**Gold 연결:** → `steam_gold_02_dbt_marts`
 
 ---
 
 ## Gold Layer
 
-### 01. 형태소 빈도 집계 `steam_gold_01_review_morphemes`
+형태소 빈도 집계(`steam_gold_01_review_morphemes`, `gold_review_morphemes`)는 2026-11 재구성에서 제거했다.
 
-**스케줄:** 매일 11:00 UTC (Silver 03 완료 후)  
-**소스:** `S3 steam-silver: reviews/`
+### dbt 마트 빌드 `steam_gold_02_dbt_marts`
 
-| 적재 테이블 | 주요 컬럼 | 처리 내용 |
-|------------|---------|---------|
-| `gold_review_morphemes` | app_id, language, morpheme, frequency, review_appearances, earliest_review_at, latest_review_at | 리뷰 전문에서 형태소 추출 후 빈도 집계, UPSERT |
-
-**언어별 분석 방식:**
-
-| 언어 | 라이브러리 | 추출 대상 |
-|------|----------|---------|
-| 한국어 | `kiwipiepy (Kiwi)` | 일반명사(NNG) + 고유명사(NNP), 2글자 이상 |
-| 영어 | 정규식 | 알파벳 단어, 불용어 제거, 3글자 이상 |
-
-- 게임·언어별 상위 1,000개 형태소만 저장 (`top_n=1000`)
-- 형태소 최대 길이 100자 제한
-- Superset 워드클라우드 시각화에 활용
-
----
-
-### 02. dbt 마트 빌드 `steam_gold_02_dbt_marts`
-
-**스케줄:** 매일 12:00 UTC (Silver + Gold 01 완료 후)  
+**스케줄:** 매일 12:00 UTC (Silver 완료 후)  
 **실행 방식:** DockerOperator → `steam-dbt:latest` 컨테이너 실행 후 자동 종료
 
 #### Staging (VIEW)
