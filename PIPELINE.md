@@ -18,7 +18,7 @@ Steam API
 | 레이어 | 저장소 | 데이터 |
 |--------|--------|--------|
 | **Bronze** | `S3 steam-raw` | 원시 JSON/Parquet (할인게임 목록, 리뷰 청크, 동접자 수, 앱 상세) |
-| **Bronze (리뷰 중간 단계)** | `Kafka (steam-reviews 토픽)` | producer가 발행한 원시 리뷰 메시지. consumer가 S3로 옮길 때까지 보관하는 버퍼 (영구 보관소 아님). consumer는 재구성 2단계에서 추가 |
+| **Bronze (리뷰 중간 단계)** | `Kafka (steam-reviews 토픽)` | producer가 발행한 원시 리뷰 메시지. consumer가 S3로 옮길 때까지 보관하는 버퍼 (영구 보관소 아님) |
 | **Silver** | `S3 steam-silver` | 정제된 리뷰 Parquet (언어·월별 파티셔닝) |
 | **Silver** | `PostgreSQL` | `dim_games`, `dim_genres`, `dim_game_genres`, `fact_price_history`, `fact_concurrent_players`, `fact_review_daily` |
 | **Gold** | `PostgreSQL` | `mart_*` (dbt 마트 테이블) |
@@ -101,14 +101,14 @@ best_purchase_option.active_discounts[].discount_end_date
 
 **스케줄:** 매일 08:00 UTC
 
-producer(Kafka 발행)와 consumer(S3 저장)를 별도 task로 분리하는 구조다.
-기존 consumer였던 Spark Structured Streaming task는 2026-11에 제거했고,
-Airflow task 기반 consumer를 재구성 2단계에서 추가한다. 현재 DAG에는 producer만 있어
-리뷰 메시지는 Kafka 토픽에만 남는다.
+producer(Kafka 발행)와 consumer(S3 저장)를 별도 task로 분리한 구조다.
+기존 consumer였던 Spark Structured Streaming task는 2026-11에 Airflow task 기반
+`KafkaTopicToS3Operator`로 대체했다. 이 operator는 다른 토픽에도 재사용한다.
 
 | Task | 오퍼레이터 | 설명 | 출력 |
 |------|-----------|------|------|
 | `collect_reviews` | `SteamReviewsToKafkaOperator` (producer) | `tracked_games`의 is_active=TRUE, collect_reviews=TRUE 게임 대상으로 한국어·영어 리뷰 증분 수집 → Kafka 발행 | `Kafka: steam-reviews` 토픽 |
+| `publish_reviews_to_s3` | `KafkaTopicToS3Operator` (consumer) | consumer group `steam-reviews-to-s3`로 토픽을 끝 offset까지 소비해 appid별 Parquet 저장 | `S3: reviews/{YYYYMMDD_HHMM}/{appid}_chunk_{묶음 토큰}.parquet` |
 
 **수집 필드:**
 ```
@@ -123,8 +123,12 @@ written_during_early_access, appid (추가)
 - 리뷰 1건마다 Kafka 메시지로 즉시 발행 (key: appid)
 - 1000건 발행마다(또는 완료 시) `tracked_games.reviews_collected_at`·cursor 체크포인트 갱신
 
-**consumer 방식 (재구성 2단계 예정):**
-- Airflow task가 실행 시점까지 쌓인 메시지를 끝까지 읽고 parquet로 S3에 저장한 뒤 offset commit
+**consumer 방식 (`publish_reviews_to_s3`):**
+- 실행 시작 시점의 파티션별 끝 offset을 기록하고 그 지점까지 읽은 뒤 종료 (상시 실행 서비스 아님)
+- 1만 건 묶음마다 appid별 파일을 모두 업로드한 뒤 offset commit. 업로드 실패 시 commit하지 않음
+- 파일명 토큰은 묶음의 파티션별 시작 offset 해시라 재시도해도 commit된 파일을 덮어쓰지 않음
+- 끝 offset 전 빈 poll이 30회 연속이면 부분 성공으로 끝내지 않고 실패 처리
+- 수집 task가 실패해도 `all_done`으로 실행해 이미 발행한 메시지를 저장
 - at-least-once 전달, 중복은 Silver에서 `(appid, recommendationid)` 기준으로 제거
 
 **Silver 연결:** → `steam_silver_03_fact_reviews` (S3 silver 파티셔닝)

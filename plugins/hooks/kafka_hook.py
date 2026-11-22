@@ -8,12 +8,12 @@ if TYPE_CHECKING:
     from kafka.producer.future import FutureRecordMetadata
 
 from airflow.hooks.base import BaseHook
-from kafka import KafkaProducer
+from kafka import KafkaConsumer, KafkaProducer
 
 
 class SteamKafkaHook:
     """
-    Kafka 프로듀서 연결을 위한 프로젝트 전용 Hook
+    Kafka producer·consumer 연결을 위한 프로젝트 전용 Hook
     """
 
     def __init__(self, kafka_conn_id: str = "kafka_default") -> None:
@@ -69,3 +69,23 @@ class SteamKafkaHook:
         if self._producer is not None:
             self._producer.close(timeout=self.delivery_timeout)
             self._producer = None
+
+    # ── 메시지 소비 ───────────────────────────────
+
+    def create_consumer(self, group_id: str) -> KafkaConsumer:
+        """
+        수동 commit용 JSON consumer 생성
+
+        - 저장 성공 후에만 offset을 commit하도록 auto commit 비활성
+        - commit 이력이 없는 group은 토픽 처음부터 읽음
+
+        :param group_id: offset commit 기준 consumer group ID
+        :return: 토픽 할당 전 상태의 consumer
+        """
+        return KafkaConsumer(
+            bootstrap_servers=self._get_bootstrap_servers(),
+            group_id=group_id,
+            enable_auto_commit=False,
+            auto_offset_reset="earliest",
+            value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+        )

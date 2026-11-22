@@ -138,8 +138,8 @@ flowchart LR
 
 각 단계 완료 시 커밋
 
-1. 형태소·Spark 제거, MinIO → SeaweedFS 교체 (2026-11-19 완료, 컨테이너 실행 검증 전)
-2. Kafka consumer task (토픽 → S3 parquet)
+1. 형태소·Spark 제거, MinIO → SeaweedFS 교체 (2026-11-19 완료, 2026-11-22 컨테이너 검증)
+2. Kafka consumer task (토픽 → S3 parquet) (`KafkaTopicToS3Operator`, 2026-11-22 통합 테스트 통과)
 3. 게임 목록·가격 정기 수집 (`Query` 실측 포함)
 4. 동접자 top 100·관리 목록·스캔과 `player_watchlist`
 5. On-demand 리뷰·평가 추이 DAG

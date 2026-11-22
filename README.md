@@ -2,7 +2,7 @@
 
 Steam의 할인·리뷰·동시 접속자·게임 상세 데이터를 수집해 할인 이력과 리뷰 작성 수·플레이타임·동접자 추이를 분석하는 개인 프로젝트다. Airflow로 수집·변환을 관리하고 로컬 Docker의 Kafka·SeaweedFS(S3 호환 저장소)·PostgreSQL 및 dbt로 Bronze → Silver → Gold/Mart를 구성한다.
 
-> **2026-11 재구성 진행 중.** 과거 조회가 가능한 데이터는 on-demand로, 현재 값만 제공되는 데이터는 정기 적재로 나누고 Silver부터 다시 구축한다. 형태소 파이프라인과 Spark는 제거했고 MinIO는 SeaweedFS로 교체했다. 리뷰의 Kafka → S3 consumer는 재구성 2단계에서 다시 추가하며, 그전까지 리뷰 메시지는 Kafka 토픽에만 남는다. 계획과 진행 순서는 [재구성 계획](docs/pipeline_plan.md)을 기준으로 한다.
+> **2026-11 재구성 진행 중.** 과거 조회가 가능한 데이터는 on-demand로, 현재 값만 제공되는 데이터는 정기 적재로 나누고 Silver부터 다시 구축한다. 형태소 파이프라인과 Spark는 제거했고 MinIO는 SeaweedFS로 교체했다. Spark consumer 자리는 Airflow task 기반 `KafkaTopicToS3Operator`로 대체했다. 계획과 진행 순서는 [재구성 계획](docs/pipeline_plan.md)을 기준으로 한다.
 
 할인/비할인 비교는 관측 데이터 분석이며 무작위 대조 실험이나 인과 추정은 아니다. 현재 저장소에는 파이프라인 코드와 검증 자료를 포함하며 대표 결과 화면은 첨부하지 않았다.
 
@@ -19,13 +19,14 @@ Steam의 할인·리뷰·동시 접속자·게임 상세 데이터를 수집해 
 
 ## 현재 데이터 처리 구조
 
-재구성 도중의 상태다. 점선은 재구성 단계에서 다시 연결할 경로다.
+재구성 도중의 상태다. 목표 구조는 [재구성 계획](docs/pipeline_plan.md)에 있다.
 
 ```mermaid
 flowchart LR
     API[Steam API] --> B[Bronze 수집 · Airflow]
     B --> K[리뷰 · Kafka]
-    K -.->|consumer 재구성 예정| RAW[SeaweedFS steam-raw]
+    K --> C[KafkaTopicToS3 consumer · Airflow]
+    C --> RAW[SeaweedFS steam-raw]
     B -->|할인 · 상세 · 동접자| RAW
     RAW --> S[Silver 변환 · Polars]
     S --> SR[SeaweedFS steam-silver · 리뷰]
@@ -35,7 +36,7 @@ flowchart LR
 ```
 
 - **수집 대상:** 할인 목록으로 `tracked_games`를 갱신하고 활성 플래그로 수집 대상을 제어한다. 리뷰 기본 언어는 한국어·영어다. 할인 목록은 KR 기준 조건으로 최대 400개를 요청한다.
-- **리뷰 Bronze:** `SteamReviewsToKafkaOperator` → Kafka `steam-reviews`. 2026-11에 Spark consumer를 제거해 현재는 S3 적재 단계가 없다. 기존 Silver 리뷰 DAG는 `steam-raw/reviews/` 아래 parquet을 입력으로 기대한다.
+- **리뷰 Bronze:** `SteamReviewsToKafkaOperator` → Kafka `steam-reviews` → `KafkaTopicToS3Operator` → `steam-raw/reviews/{실행시각}/{appid}_chunk_{묶음 토큰}.parquet`. consumer는 실행 시작 시점의 토픽 끝 offset까지 읽고 종료한다. 1만 건 묶음마다 S3 업로드 성공 후 offset을 commit하며, 묶음 토큰은 파티션별 시작 offset에서 만들어 재시도해도 commit된 파일을 덮어쓰지 않는다.
 - **날짜 수집:** 2000-01-01 UTC부터 최초 실행 종료 시각까지 30일 구간을 과거 방향으로 순회한다. 5만 건마다 날짜 경계를 이동하고 1초를 겹친다. 과거 수집 완료 후 하루를 겹쳐 증분 수집한다. 언어별 상태는 `tracked_games.review_cursors` JSONB v3에 저장하며 Kafka 전송 성공을 확인한 뒤 갱신한다.
 - **Silver:** author 필드와 UTC 작성/수정 시각을 정규화해 `steam-silver/reviews/appid=.../language=.../year=.../month=.../`에 저장한다. 원본 키 해시를 파일명에 포함해 실행이 다른 원본 청크의 덮어쓰기를 피한다. 현재 리뷰 DAG는 Bronze `reviews/` 전체를 조회한다.
 - **DB·Gold:** 게임·장르, 가격 이력, 동접자 스냅샷, 리뷰 일별 건수와 플레이타임을 PostgreSQL에 적재한다. dbt의 게임 개요·할인·리뷰·동접자·플레이타임 마트로 연결한다.
@@ -72,7 +73,7 @@ logs/                      로컬 로그·JUnit 결과 (Git 제외)
 
 2026-10-16 기존 Docker 환경에서 Python **3.10.13**, Airflow **2.8.1**, Polars **1.43.2**, PySpark **4.2.0**, kafka-python **3.0.11**, pytest **9.1.1**, PostgreSQL **15.15**로 아래 검증을 실행했다. DB 실험은 psycopg2-binary **2.9.9**를 사용했다. 당시 이미지에 있던 PySpark와 JDK 17은 2026-11 Spark 제거와 함께 빠졌다.
 
-Docker Desktop의 Linux 컨테이너와 Docker Compose가 필요하다. S3 호환 저장소는 SeaweedFS **4.52** 이미지로 고정했다. 그 밖의 일부 이미지와 추가 Python 패키지는 버전 미고정이며 재빌드 시 환경이 달라질 수 있다. SeaweedFS 구성은 2026-11 교체 후 아직 컨테이너에서 실행 검증하지 않았다.
+Docker Desktop의 Linux 컨테이너와 Docker Compose가 필요하다. S3 호환 저장소는 SeaweedFS **4.52** 이미지로 고정했다. 그 밖의 일부 이미지와 추가 Python 패키지는 버전 미고정이며 재빌드 시 환경이 달라질 수 있다. 2026-11-22 기존 볼륨이 있는 환경에서 SeaweedFS 기동, 버킷 초기화 재실행, 연결 자동 등록과 `s3_storage_smoke_test` 업로드를 확인했다.
 
 ### 환경변수와 Airflow 설정
 
@@ -133,8 +134,8 @@ Gold의 DockerOperator는 `steam-dbt:latest` 이미지, scheduler의 Docker sock
 DAG는 처음 생성할 때 pause 상태다. 선행 작업의 **성공과 출력 존재를 확인한 뒤** 다음 순서로 진행한다. 처음에는 리뷰 DAG의 `app_ids`·`languages`를 한 게임·한 언어로 제한한다. continuous 모드는 해당 게임이 DB의 활성 리뷰 수집 대상으로 등록되어 있어야 한다.
 
 1. `steam_bronze_01_discount_game_extract`: 할인 목록 → `tracked_games` 등록. 이후 수집은 이 테이블의 활성 플래그를 따른다.
-2. `steam_bronze_04_app_details_extract`, `steam_bronze_03_player_count_extract`, `steam_bronze_02_review_extract`: 상세·동접자 Bronze 생성과 리뷰 Kafka 발행. 리뷰는 consumer 재구성 전까지 S3에 저장되지 않는다.
-3. `steam_silver_01_dim_games`, `steam_silver_02_fact_price`, `steam_silver_04_fact_players`, `steam_silver_03_fact_reviews`: 각 Bronze 입력 정제·적재. 리뷰 Silver는 Bronze 리뷰 파일이 없으면 처리할 입력이 없다.
+2. `steam_bronze_04_app_details_extract`, `steam_bronze_03_player_count_extract`, `steam_bronze_02_review_extract`: 상세·동접자·리뷰 Bronze 생성. 리뷰 DAG 내부는 API→Kafka 다음 Kafka→S3 순서다.
+3. `steam_silver_01_dim_games`, `steam_silver_02_fact_price`, `steam_silver_04_fact_players`, `steam_silver_03_fact_reviews`: 각 Bronze 입력 정제·적재.
 4. `steam_silver_05_review_daily`, `steam_silver_06_review_playtime`: Silver 리뷰 전체에서 중복 제거 후 일별 집계.
 5. `steam_gold_02_dbt_marts`: DAG 내부의 `dbt_staging` → `dbt_marts` 순서로 분석 마트 생성.
 
@@ -164,7 +165,7 @@ docker compose -p steam-project -f docker-compose-local.yml down
 
 ## 테스트 실행과 검증 결과
 
-아래는 **2026-10-16 당시 코드 사후 검증** 결과다. 2026-11 재구성으로 형태소 오프라인 테스트 3개와 Kafka→Spark→MinIO 통합 테스트가 제거되어, 현재 오프라인 테스트는 37개다(2026-11-19 로컬 실행 37 passed). 아래 수치와 명령은 당시 기록으로 남긴다. 대상 버전·입력·기대값·환경·미검증 범위는 [검증 기록](docs/review_checkpoints.md)에 있다. 컨테이너에 루트 `pytest.ini`가 마운트되지 않아 `PYTHONPATH`를 명시하며 미등록 integration marker 경고가 날 수 있다.
+아래는 **2026-10-16 당시 코드 사후 검증** 결과다. 2026-11 재구성으로 형태소 오프라인 테스트 3개를 제거하고 consumer 테스트 23개를 추가해, 현재 오프라인 테스트는 60개다(2026-11-22 `airflow-scheduler` 컨테이너 Python 3.10.13에서 60 passed). 아래 수치와 명령은 당시 기록으로 남긴다. 대상 버전·입력·기대값·환경·미검증 범위는 [검증 기록](docs/review_checkpoints.md)에 있다. 컨테이너에 루트 `pytest.ini`가 마운트되지 않아 `PYTHONPATH`를 명시하며 미등록 integration marker 경고가 날 수 있다.
 
 ### 오프라인: 40 passed
 
@@ -176,10 +177,12 @@ docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python -m pyte
 
 ### 실제 로컬 서비스: 각 1 passed, 합계 2 passed / 0 skipped
 
-첫 테스트는 Kafka·Postgres의 중단 커서 재개와 증분 워터마크 갱신을 확인한다. 두 번째는 Kafka→Spark→MinIO로 리뷰 2건을 배치당 1건씩 보내 청크 2개의 행·ID·appid·언어를 확인했다. 이 테스트는 Spark 제거와 함께 삭제했고, 새 consumer에 맞춘 테스트는 재구성 2단계에서 추가한다. Steam 응답은 고정 데이터로 대체했다.
+첫 테스트는 Kafka·Postgres의 중단 커서 재개와 증분 워터마크 갱신을 확인한다. 두 번째는 Kafka→Spark→MinIO로 리뷰 2건을 배치당 1건씩 보내 청크 2개의 행·ID·appid·언어를 확인했다. 이 테스트는 Spark 제거 후 같은 파일명으로 `KafkaTopicToS3Operator` 기준으로 다시 작성했다(묶음별 청크 2개와 같은 group 재실행 시 추가 저장 없음 확인). 2026-11-22 실제 Kafka·SeaweedFS·Postgres에서 체크포인트 테스트와 함께 **2 passed**. Steam 응답은 고정 데이터로 대체했다.
 
 ```sh
 docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python -m pytest /opt/airflow/tests/integration/operators/test_review_checkpoint_resume_integration.py -m integration -v -rs --junitxml=/opt/airflow/logs/review_checkpoint_integration_20261016.xml
+# 2026-11 재작성한 consumer 통합 테스트 (2026-11-22 passed)
+docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python -m pytest /opt/airflow/tests/integration/operators/test_reviews_kafka_to_s3_integration.py -m integration -v -rs
 ```
 
 ### 실제 Steam 소량 조회: 1 passed / 0 skipped
@@ -213,7 +216,7 @@ docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python /opt/ai
 ## 알려진 한계와 후속 과제
 
 - **수집 완전성:** 실제 10만 건 초과 수집, 독립적인 정답 ID와의 비교, `200만+ 전량 적재`는 이번 검증으로 입증하지 않았다. 하루 중첩보다 늦게 나타난 오래된 리뷰와 오래된 리뷰의 수정·삭제를 포괄하는 reconciliation은 없다.
-- **전송·재시작:** Kafka ACK는 S3 적재 완료가 아니다. 발행 후 DB 저장 전 중단 시 재발행 중복이 가능하며 정확히 한 번 전송은 보장하지 않는다. 컨테이너 강제 종료, broker 장애·보관 기간 검증은 남아 있다. Kafka는 단일 브로커다. 현재는 Kafka → S3 consumer가 없어 리뷰가 S3에 적재되지 않는다.
+- **전송·재시작:** Kafka ACK는 S3 적재 완료가 아니다. 발행 후 DB 저장 전 중단 시 재발행 중복이 가능하며 정확히 한 번 전송은 보장하지 않는다. consumer는 S3 업로드 후 commit 전에 중단되면 같은 묶음을 다시 저장할 수 있다(at-least-once). 컨테이너 강제 종료, broker 장애·보관 기간 검증은 남아 있다. Kafka는 단일 브로커다. 새 consumer group은 commit 이력이 없어 첫 실행 시 토픽에 남은 메시지를 처음부터 다시 저장한다.
 - **처리 규모:** Silver는 Bronze 전체, 일별 집계는 앱별 전체 리뷰를 재조회한다. 재구성에서 요청 단위 처리로 바꾼다.
 - **운영·재현성:** DAG 간 완료 의존성이 없고 일부 이미지·의존성은 미고정이다. DB 복제·수동 failover와 Terraform·Snowflake Hook 코드의 존재를 현재 클라우드 운영·장애 복구 검증 완료로 설명하지 않는다.
 - **SQL 의미:** `mart_discount_review_trend.baseline_7d_avg`는 직전 7개 **행** 기준이다. 누락 날짜가 있으면 7일 평균과 다르며 가격 미수집일은 비할인으로 취급한다.
