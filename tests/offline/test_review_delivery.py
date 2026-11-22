@@ -75,10 +75,13 @@ def test_consumer_failure_does_not_block_full_queue():
     op = mod.SteamReviewsToKafkaOperator(task_id="cancel",languages=["english"])
     failures = []
     def run():
-        try: op._collect_and_publish(1, {}, api, kafka, pg)
-        except Exception as error: failures.append(error)
+        try:
+            op._collect_and_publish(1, {}, api, kafka, pg)
+        except Exception as error:
+            failures.append(error)
     thread = threading.Thread(target=run,daemon=True)
-    thread.start(); thread.join(timeout=3)
+    thread.start()
+    thread.join(timeout=3)
     assert not thread.is_alive(), "Producer is stuck on full queue"
     assert failures and isinstance(failures[0],RuntimeError)
     pg.run.assert_not_called()
@@ -93,9 +96,11 @@ def test_one_failed_app_fails_task_and_keeps_other_app_progress(monkeypatch):
     summary = MagicMock()
     monkeypatch.setattr(mod,"slack_collect_summary",summary)
     def collect(appid,*args):
-        if appid == 1: raise RuntimeError("failure")
+        if appid == 1:
+            raise RuntimeError("failure")
     monkeypatch.setattr(op,"_collect_and_publish",collect)
-    with pytest.raises(RuntimeError): op.execute({"ti":MagicMock()})
+    with pytest.raises(RuntimeError):
+        op.execute({"ti":MagicMock()})
     assert summary.call_args.kwargs["succeeded"] == [2]
     assert summary.call_args.kwargs["failed"] == [1]
 
@@ -103,7 +108,8 @@ def test_one_failed_app_fails_task_and_keeps_other_app_progress(monkeypatch):
 def test_continuous_mode_uses_airflow_interval_and_db_state(monkeypatch):
     op = mod.SteamReviewsToKafkaOperator(task_id="continuous",collection_mode="continuous",
         date_range_type="include",start_date=1,app_ids=[1])
-    pg = MagicMock(); pg.get_records.return_value=[(1,{"english":{"version":3}})]
+    pg = MagicMock()
+    pg.get_records.return_value=[(1,{"english":{"version":3}})]
     monkeypatch.setattr(mod,"PostgresHook",lambda **kw:pg)
     assert op._fetch_targets() == [(1,{"english":{"version":3}})]
     assert pg.get_records.call_args.kwargs["parameters"] == ([1],)
@@ -118,7 +124,9 @@ def test_continuous_mode_uses_airflow_interval_and_db_state(monkeypatch):
     {"success":1,"reviews":[{"recommendationid":"1"}],"cursor":"*"},
 ])
 def test_bad_hook_responses_are_errors_not_empty_completion(response):
-    hook=SteamApiHook();hook._request=MagicMock(return_value=response);hook._wait=MagicMock()
+    hook=SteamApiHook()
+    hook._request=MagicMock(return_value=response)
+    hook._wait=MagicMock()
     with pytest.raises((ValueError,RuntimeError)):
         list(hook.iter_review_pages(1,"english"))
 
@@ -130,7 +138,8 @@ def test_bad_hook_responses_are_errors_not_empty_completion(response):
     {"collection_mode":"continuous","date_range_type":"include","start_date":0,"end_date":1},
 ])
 def test_invalid_collection_config(kwargs):
-    with pytest.raises(ValueError):mod.SteamReviewsToKafkaOperator(task_id="invalid",**kwargs)
+    with pytest.raises(ValueError):
+        mod.SteamReviewsToKafkaOperator(task_id="invalid",**kwargs)
 
 
 def test_empty_api_window_is_also_rate_limited():

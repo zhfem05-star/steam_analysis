@@ -10,7 +10,6 @@ S3 저장소 steam-raw 버킷에 Parquet 형태로 저장한다.
 
 from __future__ import annotations
 
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone

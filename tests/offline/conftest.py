@@ -1,7 +1,6 @@
 """외부 서비스 없이 실제 프로젝트 코드와 Polars를 검증한다. Airflow 연결부만 대체한다.
 실행: python -m pytest --confcutdir=tests/offline tests/offline
 """
-import importlib.util
 import logging
 import sys
 import types

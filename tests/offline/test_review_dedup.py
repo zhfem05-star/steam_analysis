@@ -36,8 +36,10 @@ def test_collection_time_breaks_equal_edit_ties_and_games_are_distinct():
 
 
 def test_missing_identity_fails_instead_of_collapsing_unrelated_reviews():
-    with pytest.raises(ValueError):deduplicate_reviews(pl.DataFrame({"appid":[1]}))
-    with pytest.raises(ValueError):deduplicate_reviews(pl.DataFrame({"appid":[1],"recommendationid":[None]}))
+    with pytest.raises(ValueError):
+        deduplicate_reviews(pl.DataFrame({"appid":[1]}))
+    with pytest.raises(ValueError):
+        deduplicate_reviews(pl.DataFrame({"appid":[1],"recommendationid":[None]}))
 
 
 def test_daily_count_and_playtime_are_unbiased_by_duplicates():

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-import polars as pl
 from airflow.models import BaseOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
