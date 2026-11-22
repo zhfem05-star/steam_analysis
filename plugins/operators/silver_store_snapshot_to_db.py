@@ -74,6 +74,7 @@ class SilverStoreSnapshotOperator(BaseOperator):
     스냅샷 검증·적용 공통 흐름
 
     - 하위 클래스는 source와 apply_snapshot만 정의
+    - reject_older_snapshots가 False면 늦게 도착한 과거 스냅샷도 적용 (매시 동접자 재처리용)
 
     :param snapshot_prefix: producer·consumer와 같은 S3 prefix (Jinja 템플릿)
     :param min_coverage: 직전 상태 대비 허용 최소 건수 비율
@@ -83,6 +84,7 @@ class SilverStoreSnapshotOperator(BaseOperator):
     """
 
     source = ""
+    reject_older_snapshots = True
     template_fields = ("snapshot_prefix",)
 
     def __init__(
@@ -169,6 +171,10 @@ class SilverStoreSnapshotOperator(BaseOperator):
             key=manifest_key, bucket=self.s3_bucket
         )  # type: ignore[assignment]
 
+        # 대상이 없던 실행(예: 스캔 일정 도래 게임 0건)은 consumer 파일이 없음
+        if manifest["records"] == 0:
+            return manifest, pl.DataFrame({"app_id": []}, schema={"app_id": pl.Int64})
+
         keys = sorted(
             key
             for key in s3_hook.list_keys(
@@ -215,7 +221,7 @@ class SilverStoreSnapshotOperator(BaseOperator):
         """
         같은 스냅샷 적용 여부 확인 및 순서 역전 차단
 
-        :raises ValueError: 이미 적용한 스냅샷보다 수집 시각이 이르거나 같음
+        :raises ValueError: reject_older_snapshots일 때 이미 적용한 스냅샷보다 수집 시각이 이르거나 같음
         """
         cursor.execute(
             "SELECT 1 FROM silver_snapshot_log WHERE source = %s AND snapshot_id = %s",
@@ -223,6 +229,8 @@ class SilverStoreSnapshotOperator(BaseOperator):
         )
         if cursor.fetchone():
             return True
+        if not self.reject_older_snapshots:
+            return False
 
         cursor.execute(
             "SELECT snapshot_id, EXTRACT(EPOCH FROM collected_at)::BIGINT "

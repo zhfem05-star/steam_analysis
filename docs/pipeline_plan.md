@@ -16,7 +16,7 @@
 | 가격·할인·리뷰 수 | `IStoreQueryService/Query` | 정기 | 매일 18:30 UTC | 전체 게임 KR, 페이지당 1,000건 |
 | 동접자 top 100 | `ISteamChartsService/GetGamesByConcurrentPlayers` | 정기 | 1시간 | 호출 1회로 100개 |
 | 동접자 관리 목록 | `ISteamUserStats/GetNumberOfCurrentPlayers` | 정기 | 1시간 | `player_watchlist` 활성 게임 |
-| 동접자 스캔 | `ISteamUserStats/GetNumberOfCurrentPlayers` | 정기 | 매일 1회 | 스캔 일정이 도래한 게임만 (4절) |
+| 동접자 스캔 | `ISteamUserStats/GetNumberOfCurrentPlayers` | 정기 | 매일 21:00 UTC | 스캔 일정이 도래한 게임만 (4절) |
 | 게임 메타 | `store/api/appdetails` | 정기 (저빈도) | 신규 등록 시 1회 + 주 1회 | 관리 목록과 분석 요청 게임 |
 | 리뷰 상세 | `store/appreviews` 날짜 구간 | On-demand | 요청 시 | 요청한 게임·언어·기간 |
 | 리뷰 평가 추이 | `store/appreviewhistogram` | On-demand | 요청 시 | 요청한 게임·언어 |
@@ -118,7 +118,7 @@ flowchart LR
 |---|---|---|---|---|
 | Bronze | `steam-raw/players/dt=YYYY-MM-DD/hour=HH/` | 매시 1파일, 그 시각 전체 게임 | 없음 | 원본 보관·재처리 |
 | Silver | `steam-silver/players/month=YYYY-MM/` | 월 1파일, 매일 재작성 | `app_id`, `collected_at` | 전체 시계열 보관본 |
-| DB | `fact_concurrent_players` | 1시간 1행, 전체 기간 | 월별 파티션 | 분석 조회 |
+| DB | `fact_player_counts` | 1시간 1행, 전체 기간 | 월별 파티션 | 분석 조회 |
 | dbt | 동접자 일별 집계 | 하루 1행 | - | 장기 추이·마트 |
 
 - 게임별 파일은 만들지 않음. S3 객체는 append 불가이고 작은 파일이 대량 발생
@@ -141,7 +141,7 @@ flowchart LR
 1. 형태소·Spark 제거, MinIO → SeaweedFS 교체 (2026-11-19 완료, 2026-11-22 컨테이너 검증)
 2. Kafka consumer task (토픽 → S3 parquet) (`KafkaTopicToS3Operator`, 2026-11-22 통합 테스트 통과)
 3. 게임 목록·가격 정기 수집 (`Query` 실측 포함, 2026-11-22 구현·실제 API 1회 실행). 상세는 아래 "3단계 실측과 결정"
-4. 동접자 top 100·관리 목록·스캔과 `player_watchlist`
+4. 동접자 top 100·관리 목록·스캔과 `player_watchlist` (2026-11-22 구현·실제 API 실행). 상세는 아래 "4단계 실측과 결정"
 5. On-demand 리뷰·평가 추이 DAG
 6. Silver 스키마 (`init-db`)와 operator, 테스트
 7. dbt staging·마트 재작성

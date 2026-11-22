@@ -14,6 +14,12 @@ from collections.abc import Iterator
 
 import requests
 from airflow.models import Variable
+from utils.player_watchlist import (
+    PLAYER_STATUS_NOT_FOUND,
+    PLAYER_STATUS_OK,
+    PlayerCountResult,
+)
+from utils.rate_limit import SteamRateLimitError
 from utils.review_types import ReviewRecord
 
 log = logging.getLogger(__name__)
@@ -58,19 +64,27 @@ class SteamApiHook:
         key = self._api_key
         return text.replace(key, "***") if key else text
 
-    def _request(self, url: str, params: dict | None = None) -> dict:
+    def _request(self, url: str, params: dict | None = None, quiet: bool = False) -> dict:
         """
         HTTP GET 요청 + 에러 로깅
 
         - 로그와 예외 메시지에서 API key 값을 가림
         - requests 예외는 URL에 key가 포함되므로 원본 예외 연결 없이 같은 형으로 다시 발생
 
+        :param quiet: 대량 호출용. 요청 로그를 debug로 낮추고 404는 에러 로그 없이 예외만 발생
+
         :raises requests.ConnectionError: 네트워크 연결 실패
         :raises requests.Timeout: 응답 시간 초과
-        :raises requests.HTTPError: 2xx 이외 응답
+        :raises SteamRateLimitError: 429 응답
+        :raises requests.HTTPError: 429를 제외한 2xx 이외 응답
         """
         params = params or {}
-        log.info("Steam API 요청: %s  params=%s", url, self._masked_params(params))
+        log.log(
+            logging.DEBUG if quiet else logging.INFO,
+            "Steam API 요청: %s  params=%s",
+            url,
+            self._masked_params(params),
+        )
 
         try:
             resp = requests.get(url, params=params, timeout=_TIMEOUT)
@@ -81,13 +95,23 @@ class SteamApiHook:
             log.error("네트워크 연결 실패: %s", url)
             raise requests.ConnectionError(self._redact(str(error))) from None
 
-        if not resp.ok:
-            log.error(
-                "API 응답 에러: status=%s  url=%s  body=%s",
-                resp.status_code,
-                url,
-                resp.text[:500],
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After")
+            log.warning("API 요청률 초과: url=%s  Retry-After=%s", url, retry_after)
+            raise SteamRateLimitError(
+                f"Steam API 요청률 초과: url={url}",
+                retry_after=float(retry_after) if retry_after and retry_after.isdigit() else None,
             )
+
+        if not resp.ok:
+            expected_not_found = quiet and resp.status_code == 404
+            if not expected_not_found:
+                log.error(
+                    "API 응답 에러: status=%s  url=%s  body=%s",
+                    resp.status_code,
+                    url,
+                    resp.text[:500],
+                )
             raise requests.HTTPError(
                 f"Steam API 응답 오류: status={resp.status_code}, url={url}",
                 response=resp,
@@ -178,21 +202,58 @@ class SteamApiHook:
 
     # ── 공식 API: ISteamUserStats ─────────────────────
 
-    def get_current_players(self, appid: int) -> int | None:
+    def fetch_current_players(self, appid: int) -> PlayerCountResult:
         """
         특정 게임의 현재 동접자 수 조회 (API key 불필요)
 
-        :return: 동접자 수. 실패 시 None
+        - 동접 데이터가 없는 게임은 HTTP 404와 result 42로 응답하므로 not_found로 구분
+        - 네트워크 오류·5xx는 예외로 올려 호출자가 수집 실패(error)로 기록
+
+        :return: 동접자 수와 조회 상태
+        :raises SteamRateLimitError: 429 응답
+        :raises requests.RequestException: 404 이외 요청 실패
         """
         url = f"{_BASE_URL_API}/ISteamUserStats/GetNumberOfCurrentPlayers/v1/"
-        data = self._request(url, {"appid": appid})
+        try:
+            data = self._request(url, {"appid": appid}, quiet=True)
+        except requests.HTTPError as error:
+            if error.response is not None and error.response.status_code == 404:
+                return PlayerCountResult(None, PLAYER_STATUS_NOT_FOUND)
+            raise
+
         response = data.get("response", {})
+        if response.get("result") == 1 and "player_count" in response:
+            return PlayerCountResult(int(response["player_count"]), PLAYER_STATUS_OK)
+        return PlayerCountResult(None, PLAYER_STATUS_NOT_FOUND)
 
-        if response.get("result") == 1:
-            return response["player_count"]
+    def get_current_players(self, appid: int) -> int | None:
+        """
+        특정 게임의 현재 동접자 수 조회
 
-        log.warning("동접자 조회 실패: appid=%s  response=%s", appid, response)
-        return None
+        :return: 동접자 수. 데이터 없음이면 None
+        """
+        return self.fetch_current_players(appid).player_count
+
+    # ── 공식 API: ISteamChartsService ─────────────────
+
+    def get_top_concurrent_players(self) -> list[dict]:
+        """
+        현재 동접자 상위 100개 게임 조회
+
+        - 2026-11-22 실측: 호출 1회 100개, 약 0.2초, 응답 갱신 지연 수 분
+
+        :return: [{"rank": 1, "appid": 730, "concurrent_in_game": ..., "peak_in_game": ...}, ...]
+        :raises RuntimeError: 응답에 ranks가 없거나 비어 있음
+        """
+        url = f"{_BASE_URL_API}/ISteamChartsService/GetGamesByConcurrentPlayers/v1/"
+        data = self._request(url, {"key": self.api_key})
+        ranks = data.get("response", {}).get("ranks")
+
+        if not ranks:
+            raise RuntimeError(
+                f"GetGamesByConcurrentPlayers 응답에 순위 없음: response 키={sorted(data.get('response', {}))}"
+            )
+        return ranks
 
     # ── 비공식 API: Store ─────────────────────────────
 

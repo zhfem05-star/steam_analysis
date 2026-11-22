@@ -36,7 +36,9 @@ Steam API
 
 [Silver - 팩트]
   fact_price_history           ← 일별 가격·할인 스냅샷
-  fact_concurrent_players      ← 일별 동접자 수 스냅샷
+  fact_player_counts           ← 매시 동접자 (월별 파티션, 4단계)
+  player_watchlist             ← 동접자 관리 목록·스캔 일정 (4단계)
+  fact_concurrent_players      ← 구 동접자 스냅샷 (수집 중단, 7단계에서 제거)
   fact_review_daily            ← 언어·날짜별 리뷰 작성 수 집계
 
 [Gold]
@@ -58,8 +60,9 @@ steam-raw/                              ← Bronze 원시 데이터
   reviews/
     {YYYYMMDD_HHMM}/
       {appid}_chunk_{N:03d}.parquet
-  player_counts/
-    {YYYYMMDD_HHMM}_player_counts.json
+  players/dt=YYYY-MM-DD/hour=HH/     (매시 동접자, 4단계)
+  player_scan/{ts_nodash}/           (일별 스캔, 4단계)
+  player_counts/                     (구 동접자 JSON, 2026-11-22 수집 중단)
   appdetails/
     {YYYYMMDD_HHMM}/
       {appid}.parquet
@@ -90,6 +93,32 @@ steam-silver/                           ← Silver 정제 데이터 (대용량 �
 - 가격은 Steam 응답 cents 값 그대로다. KRW는 100으로 나누면 원 단위다(예: 6,600,000 → ₩66,000).
 
 **적용 거부 조건:** manifest 없음, 건수 불일치, 이미 적용한 스냅샷보다 오래된 스냅샷, 직전 상태 대비 90% 미만으로 급감. 같은 스냅샷 재실행은 `silver_snapshot_log`로 건너뛴다.
+
+---
+
+## 동접자 수집과 관리 목록 (재구성 4단계)
+
+| DAG | 스케줄 | 출처 | Kafka 토픽 | S3 | DB |
+|-----|--------|------|-----------|----|----|
+| `steam_players_01_hourly` | 매시 정각 | `GetGamesByConcurrentPlayers` 1회 + 활성 관리 목록 개별 호출 | `steam.players` | `players/dt=YYYY-MM-DD/hour=HH/` | `fact_player_counts`, `player_watchlist` |
+| `steam_players_02_daily_scan` | 매일 21:00 UTC | 스캔 일정 도래 게임 개별 호출 (1회 최대 30,000건) | `steam.player_scan` | `player_scan/{ts_nodash}/` | `player_watchlist` |
+
+**관리 목록 `player_watchlist`:** 전체 게임의 스캔 일정과 매시 수집 대상(`is_active`)을 함께 둔다.
+- 고정 대상: top 100에 한 번이라도 들어온 게임(`first_top100_at`)과 `source = 'manual'`. 순위를 벗어나도 계속 수집하고 자동 해제하지 않는다. 해제하려면 `first_top100_at`을 비우고 `source`를 `scan`으로 바꾼다
+- 예산 대상: 고정 대상이 아닌 게임 중 `recent_peak` 상위 N개(Variable `player_watchlist_budget`, 기본 2000)
+- 매시 호출 수 = top 100 1회 + (고정 대상 중 이번 top 100에 없는 게임) + 예산 대상
+
+**매시 수집 순서:** top 100 호출 → 활성 게임 중 top 100 응답에 없는 게임만 개별 호출 → `fact_player_counts` 적재 → top 100 응답 게임 고정 등록. 개별 호출은 초당 5건 token bucket을 거치고 429는 `Retry-After` 대기 후 요청률을 절반으로 낮춘다.
+
+**일별 스캔 순서:**
+1. `sync_watchlist`: `dim_apps` 신규 게임 등록. 신규 게재·할인 시작·리뷰 수 급증(직전 구간 대비 20건 이상) 게임은 우선 스캔 표시
+2. `produce_scan`: 비활성이고 `next_scan_at`이 지난 게임을 우선 스캔 → 리뷰 수 → 대기 시간 순으로 최대 N건 조회
+3. `apply_scan`: 동접자가 없거나 10명(Variable `player_scan_low_threshold`) 미만이면 간격 2배(최대 30일), 아니면 1일. 수집 실패는 간격 유지 후 다음 날 재시도
+4. `rebalance`: 활성 게임은 최근 7일 매시 최댓값, 스캔 게임은 스캔 값으로 `recent_peak`를 정하고 예산 대상을 다시 고른다. 빠진 게임은 다음 날부터 1일 간격 스캔으로 돌아간다
+
+**`fact_player_counts`:** `(app_id, collected_at)` 키, `collected_at`은 수집 슬롯 정시, `fetched_at`은 실제 호출 시각. 값 출처(`top100`, `individual`)와 상태(`ok`, `not_found`, `error`)를 남긴다. 데이터 없음·실패는 0이 아닌 NULL이다. 월별 파티션은 적재 시 자동 생성한다. 기존 `fact_concurrent_players`는 7단계 dbt 전환 후 제거한다.
+
+**실패 처리:** 개별 조회 실패가 20건 연속이거나 전체의 20%를 넘으면 manifest 없이 실패한다. 매시 수집은 슬롯 정시보다 45분 넘게 늦게 실행되면 현재 값을 과거 슬롯에 기록하지 않도록 실패한다.
 
 ---
 
@@ -154,20 +183,9 @@ written_during_early_access, appid (추가)
 
 ---
 
-### 03. 동접자 수 수집 `steam_bronze_03_player_count_extract`
+### 03. 동접자 수 수집
 
-**스케줄:** 매일 08:00 UTC
-
-| Task | 설명 | 출력 |
-|------|------|------|
-| `collect_player_counts` | `tracked_games`의 is_active=TRUE, collect_players=TRUE 게임 대상으로 현재 동접자 수 수집 | `S3: player_counts/{YYYYMMDD_HHMM}_player_counts.json` |
-
-**수집 필드:**
-```
-appid, player_count, collected_at
-```
-
-**Silver 연결:** → `steam_silver_04_fact_players` (동접자 수 이력)
+2026-11-22 제거. [동접자 수집과 관리 목록](#동접자-수집과-관리-목록-재구성-4단계)으로 대체
 
 ---
 
@@ -230,14 +248,9 @@ recommendations_total, collected_at
 
 ---
 
-### 04. 동접자 수 이력 `steam_silver_04_fact_players`
+### 04. 동접자 수 이력
 
-**스케줄:** 매일 09:00 UTC  
-**소스:** `S3 steam-raw: player_counts/{YYYYMMDD}/`
-
-| 적재 테이블 | 주요 컬럼 | 처리 내용 |
-|------------|---------|---------|
-| `fact_concurrent_players` | app_id, concurrent_in_game, collected_at | 같은 날 복수 스냅샷 모두 적재, UPSERT |
+2026-11-22 제거. 매시 수집 DAG의 `load_player_counts`가 `fact_player_counts`에 적재한다.
 
 ---
 

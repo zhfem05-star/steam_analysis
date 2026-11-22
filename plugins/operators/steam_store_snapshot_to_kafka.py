@@ -2,6 +2,7 @@
 Steam 스토어 전체 스냅샷 → Kafka 발행 오퍼레이터
 
 - 게임 목록(GetAppList)과 KR 가격·리뷰 요약(Query) 전체 순회를 Kafka 토픽으로 발행
+- 동접자 수집(steam_players_to_kafka)도 같은 manifest 흐름을 사용
 - 페이지마다 Kafka 전송 성공을 확인하고, 전체 순회가 끝나면 S3에 manifest 기록
 - manifest가 있어야 Silver가 해당 스냅샷을 완료된 순회로 보고 구간을 갱신
 
@@ -21,6 +22,7 @@ from airflow.models import BaseOperator
 from hooks.kafka_hook import SteamKafkaHook
 from hooks.s3_hook import BUCKET_RAW, SteamS3Hook
 from hooks.steam_api import SteamApiHook
+from utils.player_watchlist import PlayerCountMessage
 from utils.store_catalog import (
     MANIFEST_FILENAME,
     AppListMessage,
@@ -30,7 +32,7 @@ from utils.store_catalog import (
     to_app_list_message,
 )
 
-SnapshotMessage = AppListMessage | StorePriceMessage
+SnapshotMessage = AppListMessage | StorePriceMessage | PlayerCountMessage
 
 
 class SnapshotPage(NamedTuple):
