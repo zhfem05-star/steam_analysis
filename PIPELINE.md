@@ -74,6 +74,25 @@ steam-silver/                           ← Silver 정제 데이터 (대용량 �
 
 ---
 
+## 게임 목록·가격 정기 스냅샷 (재구성 3단계)
+
+두 DAG 모두 같은 구조다. producer가 전체 순회를 Kafka로 발행하고 전송 확인 후 S3에 `_manifest.json`을 남긴다. consumer(`KafkaTopicToS3Operator`)가 같은 prefix에 parquet을 저장하고, Silver는 manifest 건수와 고유 appid 수가 같을 때만 DB를 갱신한다.
+
+| DAG | 스케줄 | 출처 | Kafka 토픽 | S3 | DB |
+|-----|--------|------|-----------|----|----|
+| `steam_catalog_01_app_list` | 매일 06:00 UTC | `GetAppList` 게임 전체 (5회 호출) | `steam.app_list` | `app_list/{ts_nodash}/` | `dim_apps` |
+| `steam_catalog_02_store_prices` | 매일 18:30 UTC | `Query` KR 전체 순회 (202회 호출, 약 5분) | `steam.prices` | `store_prices/{ts_nodash}/` | `fact_price_intervals`, `fact_review_summary_intervals` |
+
+**변경 구간 저장:**
+- 값이 바뀐 시점만 행을 추가한다. 열린 구간(`valid_to IS NULL`)은 게임당 최대 1개이며 부분 unique index로 보장한다.
+- 같은 값이 다시 관측되면 `last_seen_at`만 갱신한다. 스냅샷에서 사라진 게임은 구간을 닫는다.
+- 실제 변경 시각은 `(직전 구간 last_seen_at, valid_from]` 사이다. 특정 날짜 값은 `d >= valid_from AND (valid_to IS NULL OR d < valid_to)`로 조회한다.
+- 가격은 Steam 응답 cents 값 그대로다. KRW는 100으로 나누면 원 단위다(예: 6,600,000 → ₩66,000).
+
+**적용 거부 조건:** manifest 없음, 건수 불일치, 이미 적용한 스냅샷보다 오래된 스냅샷, 직전 상태 대비 90% 미만으로 급감. 같은 스냅샷 재실행은 `silver_snapshot_log`로 건너뛴다.
+
+---
+
 ## Bronze Layer
 
 ### 01. 할인 게임 수집 `steam_bronze_01_discount_game_extract`

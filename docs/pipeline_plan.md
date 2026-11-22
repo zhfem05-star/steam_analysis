@@ -12,8 +12,8 @@
 
 | 데이터 | API | 방식 | 주기 | 대상 |
 |---|---|---|---|---|
-| 게임 목록 | `IStoreService/GetAppList` | 정기 | 매일 | 전체 게임 (DLC·소프트웨어·영상·하드웨어 제외), `if_modified_since` 증분 |
-| 가격·할인·리뷰 수 | `IStoreQueryService/Query` | 정기 | 매일 1회 (18:00 UTC 전후) | 전체 게임, 페이지 단위 |
+| 게임 목록 | `IStoreService/GetAppList` | 정기 | 매일 06:00 UTC | 전체 게임 (DLC·소프트웨어·영상·하드웨어 제외). 목록에서 사라진 게임을 알기 위해 증분 대신 전체 |
+| 가격·할인·리뷰 수 | `IStoreQueryService/Query` | 정기 | 매일 18:30 UTC | 전체 게임 KR, 페이지당 1,000건 |
 | 동접자 top 100 | `ISteamChartsService/GetGamesByConcurrentPlayers` | 정기 | 1시간 | 호출 1회로 100개 |
 | 동접자 관리 목록 | `ISteamUserStats/GetNumberOfCurrentPlayers` | 정기 | 1시간 | `player_watchlist` 활성 게임 |
 | 동접자 스캔 | `ISteamUserStats/GetNumberOfCurrentPlayers` | 정기 | 매일 1회 | 스캔 일정이 도래한 게임만 (4절) |
@@ -55,7 +55,7 @@ flowchart LR
 | `steam.reviews` | 리뷰 상세 |
 | `steam.review_histogram` | 리뷰 평가 추이 |
 
-- **DAG 연결:** Bronze 완료 시 Airflow Dataset으로 Silver 실행. 시각 배치 의존 제거
+- **DAG 연결:** 정기 스냅샷은 producer → consumer → Silver를 한 DAG 안의 task로 연결. Airflow Dataset 이벤트는 Silver가 읽을 스냅샷 경로를 전달하지 못해 보류 (3단계에서 변경)
 - **On-demand DAG:** `schedule=None`, 파라미터 `app_ids`, `languages`, `start_date`, `end_date`. 날짜 구간 체크포인트로 중단 후 재개
 
 ## 4. 동접자 관리 목록과 스캔 최적화
@@ -140,9 +140,47 @@ flowchart LR
 
 1. 형태소·Spark 제거, MinIO → SeaweedFS 교체 (2026-11-19 완료, 2026-11-22 컨테이너 검증)
 2. Kafka consumer task (토픽 → S3 parquet) (`KafkaTopicToS3Operator`, 2026-11-22 통합 테스트 통과)
-3. 게임 목록·가격 정기 수집 (`Query` 실측 포함)
+3. 게임 목록·가격 정기 수집 (`Query` 실측 포함, 2026-11-22 구현·실제 API 1회 실행). 상세는 아래 "3단계 실측과 결정"
 4. 동접자 top 100·관리 목록·스캔과 `player_watchlist`
 5. On-demand 리뷰·평가 추이 DAG
 6. Silver 스키마 (`init-db`)와 operator, 테스트
 7. dbt staging·마트 재작성
 8. README·PIPELINE 갱신
+
+## 8. 3단계 실측과 결정 (2026-11-22)
+
+### API 실측
+
+| API | 결과 |
+|---|---|
+| `GetAppList` 게임만 | 201,890~201,892개, 페이지당 5만 건 × 5회, 약 20MB, 약 8초. 필드 `appid`, `name`, `last_modified`, `price_change_number` |
+| `GetAppList` `if_modified_since` 24시간 | 1,693개 (증분만으로는 목록 이탈을 알 수 없어 미사용) |
+| `Query` 이름순 전체 순회 | 201,011건, 중복 0, 페이지당 최대 1,000건(5,000 요청 시에도 1,000), `start=100000`에서도 응답. 202회, 4.5~6분 |
+| `Query` 응답 | 가격 있음 119,033, 무료 24,082, 할인 9,778, 리뷰 요약 전 항목. 게임 아닌 항목 2건 |
+| `GetItems` | 요청당 250개까지 (300개 400 오류). 전체 조회에 800회 이상 필요해 미사용 |
+| `GetAppList`만 있음 / `Query`만 있음 | 880개 / 1개 (출시 예정·KR 비공개 추정) |
+
+### 결정
+
+- **가격 지역:** KR만
+- **저장 방식:** PostgreSQL에는 값이 바뀐 구간만 저장, 일별 전체 스냅샷은 S3 parquet에 보관
+- **완료 판정:** producer가 전송 확인 후 manifest 기록, Silver는 manifest 건수와 고유 appid 수 일치 시에만 적용
+- **오적용 차단:** 같은 스냅샷 재적용 건너뜀, 오래된 스냅샷 거부, 직전 대비 90% 미만 급감 시 중단
+- **DAG 연결:** producer → consumer → Silver를 한 DAG에서 연결 (Dataset 보류)
+- **API key:** Compose `AIRFLOW_VAR_STEAM_API_KEY`로 Variable 자동 등록, Hook 로그·예외에서 key 가림
+
+### 실제 실행 (2026-11-22, 기존 볼륨 환경)
+
+| 실행 | 결과 |
+|---|---|
+| 게임 목록 1회 | 201,892건 발행·저장, `dim_apps` 201,892행. 같은 스냅샷 Silver 재실행은 건너뜀 |
+| 가격 1회차 | 201,011건, 가격·리뷰 구간 각 201,011행 신규 |
+| 가격 2회차 (약 5분 뒤) | 가격 touch 201,010 / close 1 / insert 1 (다른 게임 1개씩 이탈·신규), 리뷰 touch 200,940 / close 71 / insert 71 |
+| 불변 조건 | 게임당 열린 구간 1개 이하, `valid_to < valid_from` 0건, 오늘 Airflow 로그에 API key 포함 0건 |
+| 용량 | 가격 구간 29MB, 리뷰 구간 25MB, `dim_apps` 25MB (1회차 기준) |
+
+### 남은 일
+
+- 기존 `steam_bronze_01_discount_game_extract`·`fact_price_history`·`tracked_games`는 4·5단계에서 정리 (지금은 그대로 동작)
+- dbt 마트는 아직 `fact_price_history`를 사용. 7단계에서 `fact_price_intervals`로 전환
+- 가격 구간의 실제 할인 시작·종료 추적은 18:30 UTC 정기 실행이 쌓인 뒤 확인

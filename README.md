@@ -35,6 +35,7 @@ flowchart LR
     DB --> M[dbt staging · 분석 마트 6개]
 ```
 
+- **게임 목록·가격 (재구성 3단계):** `steam_catalog_01_app_list`가 매일 `GetAppList` 전체 게임(약 20만 개)을 `dim_apps`에, `steam_catalog_02_store_prices`가 매일 `Query` 전체 순회로 KR 가격·리뷰 요약을 변경 구간 테이블(`fact_price_intervals`, `fact_review_summary_intervals`)에 반영한다. 두 DAG 모두 producer → Kafka → consumer → Silver 순서이며, producer가 남긴 manifest 건수와 실제 적재 건수가 같을 때만 Silver를 갱신한다.
 - **수집 대상:** 할인 목록으로 `tracked_games`를 갱신하고 활성 플래그로 수집 대상을 제어한다. 리뷰 기본 언어는 한국어·영어다. 할인 목록은 KR 기준 조건으로 최대 400개를 요청한다.
 - **리뷰 Bronze:** `SteamReviewsToKafkaOperator` → Kafka `steam-reviews` → `KafkaTopicToS3Operator` → `steam-raw/reviews/{실행시각}/{appid}_chunk_{묶음 토큰}.parquet`. consumer는 실행 시작 시점의 토픽 끝 offset까지 읽고 종료한다. 1만 건 묶음마다 S3 업로드 성공 후 offset을 commit하며, 묶음 토큰은 파티션별 시작 offset에서 만들어 재시도해도 commit된 파일을 덮어쓰지 않는다.
 - **날짜 수집:** 2000-01-01 UTC부터 최초 실행 종료 시각까지 30일 구간을 과거 방향으로 순회한다. 5만 건마다 날짜 경계를 이동하고 1초를 겹친다. 과거 수집 완료 후 하루를 겹쳐 증분 수집한다. 언어별 상태는 `tracked_games.review_cursors` JSONB v3에 저장하며 Kafka 전송 성공을 확인한 뒤 갱신한다.
@@ -94,7 +95,7 @@ Snowflake 사용 시에만 `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD`, `SNOWFLAKE_AC
 
 Airflow UI의 Admin에서 아래 항목을 확인한다.
 
-- **Variable `steam_api_key`:** 현재 Hook은 `Variable.get("steam_api_key")`를 읽는다. `.env`의 `STEAM_API_KEY`만으로는 등록되지 않는다. 실제 리뷰 조회 자체에는 키가 필요 없지만 할인 목록 수집에는 필요하다.
+- **Variable `steam_api_key`:** Hook은 `Variable.get("steam_api_key")`를 읽는다. Compose의 `AIRFLOW_VAR_STEAM_API_KEY`가 `.env`의 `STEAM_API_KEY`를 Variable로 자동 등록한다. 리뷰 조회에는 키가 필요 없지만 게임 목록·가격·할인 목록 수집에는 필요하다. Hook 로그와 예외 메시지에서는 키 값을 `***`로 가린다.
 - **Connection `analytics_db`:** Postgres, host `analytics-postgres`, port `5432`, database `steam_analytics`. Compose의 `AIRFLOW_CONN_ANALYTICS_DB`로 제공된다.
 - **Connection `s3_storage`:** Amazon Web Services, endpoint `http://seaweedfs:8333`. Compose의 `AIRFLOW_CONN_S3_STORAGE`로 제공된다. 운영에서 AWS S3를 쓰려면 이 연결만 바꾼다.
 - **Connection `kafka_default`:** host `kafka`, port `9092`. Compose의 `AIRFLOW_CONN_KAFKA_DEFAULT`로 제공된다.
@@ -133,6 +134,7 @@ Gold의 DockerOperator는 `steam-dbt:latest` 이미지, scheduler의 Docker sock
 
 DAG는 처음 생성할 때 pause 상태다. 선행 작업의 **성공과 출력 존재를 확인한 뒤** 다음 순서로 진행한다. 처음에는 리뷰 DAG의 `app_ids`·`languages`를 한 게임·한 언어로 제한한다. continuous 모드는 해당 게임이 DB의 활성 리뷰 수집 대상으로 등록되어 있어야 한다.
 
+0. `steam_catalog_01_app_list`, `steam_catalog_02_store_prices`: 게임 목록과 KR 가격·리뷰 요약 정기 스냅샷. 기존 DAG와 독립적으로 실행된다. 기존 DB 볼륨에는 `init-db/07_create_store_catalog.sql`을 직접 적용해야 한다(`psql -f`).
 1. `steam_bronze_01_discount_game_extract`: 할인 목록 → `tracked_games` 등록. 이후 수집은 이 테이블의 활성 플래그를 따른다.
 2. `steam_bronze_04_app_details_extract`, `steam_bronze_03_player_count_extract`, `steam_bronze_02_review_extract`: 상세·동접자·리뷰 Bronze 생성. 리뷰 DAG 내부는 API→Kafka 다음 Kafka→S3 순서다.
 3. `steam_silver_01_dim_games`, `steam_silver_02_fact_price`, `steam_silver_04_fact_players`, `steam_silver_03_fact_reviews`: 각 Bronze 입력 정제·적재.
@@ -165,7 +167,7 @@ docker compose -p steam-project -f docker-compose-local.yml down
 
 ## 테스트 실행과 검증 결과
 
-아래는 **2026-10-16 당시 코드 사후 검증** 결과다. 2026-11 재구성으로 형태소 오프라인 테스트 3개를 제거하고 consumer 테스트 23개를 추가해, 현재 오프라인 테스트는 60개다(2026-11-22 `airflow-scheduler` 컨테이너 Python 3.10.13에서 60 passed). 아래 수치와 명령은 당시 기록으로 남긴다. 대상 버전·입력·기대값·환경·미검증 범위는 [검증 기록](docs/review_checkpoints.md)에 있다. 컨테이너에 루트 `pytest.ini`가 마운트되지 않아 `PYTHONPATH`를 명시하며 미등록 integration marker 경고가 날 수 있다.
+아래는 **2026-10-16 당시 코드 사후 검증** 결과다. 2026-11 재구성으로 형태소 오프라인 테스트 3개를 제거하고 consumer 테스트 23개, 게임 목록·가격 테스트 21개를 추가해, 현재 오프라인 테스트는 81개다(2026-11-22 `airflow-scheduler` 컨테이너 Python 3.10.13에서 81 passed). 게임 목록·가격 DAG의 실제 실행 결과는 [재구성 계획](docs/pipeline_plan.md#8-3단계-실측과-결정-2026-11-22)에 있다. 아래 수치와 명령은 당시 기록으로 남긴다. 대상 버전·입력·기대값·환경·미검증 범위는 [검증 기록](docs/review_checkpoints.md)에 있다. 컨테이너에 루트 `pytest.ini`가 마운트되지 않아 `PYTHONPATH`를 명시하며 미등록 integration marker 경고가 날 수 있다.
 
 ### 오프라인: 40 passed
 

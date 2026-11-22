@@ -48,29 +48,50 @@ class SteamApiHook:
 
     # ── 내부 공통 메서드 ─────────────────────────────
 
+    @staticmethod
+    def _masked_params(params: dict) -> dict:
+        """로그용 파라미터 사본 (API key 값 가림)"""
+        return {k: ("***" if k == "key" else v) for k, v in params.items()}
+
+    def _redact(self, text: str) -> str:
+        """예외 메시지에 포함된 요청 URL의 API key 값 가림"""
+        key = self._api_key
+        return text.replace(key, "***") if key else text
+
     def _request(self, url: str, params: dict | None = None) -> dict:
         """
         HTTP GET 요청 + 에러 로깅
+
+        - 로그와 예외 메시지에서 API key 값을 가림
+        - requests 예외는 URL에 key가 포함되므로 원본 예외 연결 없이 같은 형으로 다시 발생
+
+        :raises requests.ConnectionError: 네트워크 연결 실패
+        :raises requests.Timeout: 응답 시간 초과
+        :raises requests.HTTPError: 2xx 이외 응답
         """
         params = params or {}
-        log.info("Steam API 요청: %s  params=%s", url, params)
+        log.info("Steam API 요청: %s  params=%s", url, self._masked_params(params))
 
         try:
             resp = requests.get(url, params=params, timeout=_TIMEOUT)
-        except requests.ConnectionError:
-            log.error("네트워크 연결 실패: %s", url)
-            raise
-        except requests.Timeout:
+        except requests.Timeout as error:
             log.error("요청 타임아웃(%ss): %s", _TIMEOUT, url)
-            raise
+            raise requests.Timeout(self._redact(str(error))) from None
+        except requests.ConnectionError as error:
+            log.error("네트워크 연결 실패: %s", url)
+            raise requests.ConnectionError(self._redact(str(error))) from None
 
         if not resp.ok:
             log.error(
-                "API 응답 에러: status=%s  body=%s",
+                "API 응답 에러: status=%s  url=%s  body=%s",
                 resp.status_code,
+                url,
                 resp.text[:500],
             )
-            resp.raise_for_status()
+            raise requests.HTTPError(
+                f"Steam API 응답 오류: status={resp.status_code}, url={url}",
+                response=resp,
+            )
 
         return resp.json()
 
@@ -81,6 +102,56 @@ class SteamApiHook:
         time.sleep(seconds)
 
     # ── 공식 API: IStoreService ───────────────────────
+
+    def iter_app_list_pages(
+        self,
+        max_results: int = 50000,
+        include_games: bool = True,
+        include_dlc: bool = False,
+        include_software: bool = False,
+    ) -> Iterator[list[dict]]:
+        """
+        전체 Steam 앱 목록을 페이지 단위로 순회
+
+        - 영상·하드웨어는 항상 제외
+        - 페이지 사이에 rate limit 대기
+
+        :yield: 페이지별 앱 목록. 항목 필드는 appid, name, last_modified, price_change_number
+        :raises RuntimeError: 다음 페이지가 있다는 응답에 last_appid가 없음
+        """
+        url = f"{_BASE_URL_API}/IStoreService/GetAppList/v1/"
+        last_appid = 0
+        received = 0
+
+        while True:
+            params = {
+                "key": self.api_key,
+                "max_results": max_results,
+                "last_appid": last_appid,
+                "include_games": include_games,
+                "include_dlc": include_dlc,
+                "include_software": include_software,
+                "include_videos": False,
+                "include_hardware": False,
+            }
+
+            data = self._request(url, params)
+            response = data.get("response", {})
+            apps = response.get("apps", [])
+            received += len(apps)
+
+            log.info("앱 %d개 수신 (누적: %d)", len(apps), received)
+            yield apps
+
+            if not response.get("have_more_results"):
+                return
+
+            if "last_appid" not in response:
+                raise RuntimeError(
+                    f"GetAppList 다음 페이지 기준 누락: 누적 수신={received}, 직전 last_appid={last_appid}"
+                )
+            last_appid = response["last_appid"]
+            self._wait()
 
     def get_app_list(
         self,
@@ -94,34 +165,16 @@ class SteamApiHook:
 
         :return: [{"appid": 730, "name": "Counter-Strike 2", ...}, ...]
         """
-        url = f"{_BASE_URL_API}/IStoreService/GetAppList/v1/"
-        all_apps = []
-        last_appid = 0
-
-        while True:
-            params = {
-                "key": self.api_key,
-                "max_results": max_results,
-                "last_appid": last_appid,
-                "include_games": include_games,
-                "include_dlc": include_dlc,
-                "include_software": include_software,
-            }
-
-            data = self._request(url, params)
-            response = data.get("response", {})
-            apps = response.get("apps", [])
-            all_apps.extend(apps)
-
-            log.info("앱 %d개 수신 (누적: %d)", len(apps), len(all_apps))
-
-            if not response.get("have_more_results"):
-                break
-
-            last_appid = response["last_appid"]
-            self._wait()
-
-        return all_apps
+        return [
+            app
+            for page in self.iter_app_list_pages(
+                max_results=max_results,
+                include_games=include_games,
+                include_dlc=include_dlc,
+                include_software=include_software,
+            )
+            for app in page
+        ]
 
     # ── 공식 API: ISteamUserStats ─────────────────────
 
@@ -449,3 +502,59 @@ class SteamApiHook:
 
         data = self._request(url, params)
         return data
+
+    def iter_store_query_pages(
+        self,
+        query_name: str,
+        filters: dict,
+        context: dict,
+        data_request: dict,
+        page_size: int = 1000,
+        sort: int = 1,
+    ) -> Iterator[tuple[list[dict], int]]:
+        """
+        IStoreQueryService/Query 전체 결과를 페이지 단위로 순회
+
+        - 이름순(sort=1) 순회에서 중복·누락 없음을 2026-11-22 전체 201,011건으로 확인
+        - 페이지 사이에 rate limit 대기
+        - 끝까지 받지 못한 순회는 완료로 취급하면 안 되므로 빈 페이지가 먼저 오면 예외
+
+        :param query_name: 로깅용 쿼리 이름
+        :param filters: query.filters 객체
+        :param context: 언어·국가 설정
+        :param data_request: 응답에 포함할 데이터
+        :param page_size: 페이지당 요청 수 (API 최대 1000)
+        :param sort: 정렬 기준
+        :yield: (페이지 항목 목록, 응답의 전체 건수)
+        :raises RuntimeError: 전체 건수에 도달하기 전에 빈 페이지 수신
+        """
+        start = 0
+        total: int | None = None
+
+        while total is None or start < total:
+            data = self.get_query(
+                query_name=query_name,
+                start=start,
+                count=page_size,
+                sort=sort,
+                filters=filters,
+                context=context,
+                data_request=data_request,
+            )
+            response = data.get("response", {})
+            total = int(response.get("metadata", {}).get("total_matching_records", 0))
+            items = response.get("store_items", [])
+
+            if not items:
+                if start >= total:
+                    return
+                raise RuntimeError(
+                    f"Query 순회 중 빈 페이지: query={query_name}, start={start}, total={total}"
+                )
+
+            log.info("Query %s: %d건 수신 (%d/%d)", query_name, len(items), start + len(items), total)
+            yield items, total
+
+            start += len(items)
+            if start < total:
+                self._wait()
