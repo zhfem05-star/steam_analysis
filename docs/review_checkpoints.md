@@ -48,7 +48,7 @@ Bronze는 경계 중복과 재시도 중복을 보존한다. 수집한 리뷰 ID
 3. 예전 파일처럼 수집 시각이 없으면 정렬된 원본 파일 순서를 사용한다.
 4. ID가 없거나 비어 있으면 조용히 합치지 않고 실패한다.
 
-Silver 변환에서는 청크 내부 중복을 제거한다. 일별 건수·플레이타임·Gold 형태소 집계에서는 해당 앱의 파일들을 합친 뒤 파일과 실행을 가로질러 중복 제거한다. 언어가 바뀐 리뷰도 최신본을 선택한 후 언어별로 나눈다. 기존에 사라진 그룹이나 단어가 남지 않도록 집계 교체는 DB 트랜잭션 안에서 수행한다.
+Silver 변환에서는 청크 내부 중복을 제거한다. 일별 건수·플레이타임 집계에서는 해당 앱의 파일들을 합친 뒤 파일과 실행을 가로질러 중복 제거한다. 언어가 바뀐 리뷰도 최신본을 선택한 후 언어별로 나눈다. 기존에 사라진 그룹이나 단어가 남지 않도록 집계 교체는 DB 트랜잭션 안에서 수행한다.
 
 Silver 파일명에는 전체 Bronze 원본 키의 해시를 넣는다. 다른 실행의 같은 청크 번호가 서로 덮어쓰지 않고, 같은 원본 재처리는 같은 키에 저장된다. 과거 이름의 파일은 자동 삭제하지 않는다. 집계 시 새 파일과 함께 ID로 중복 제거한다.
 
@@ -59,8 +59,9 @@ Silver 파일명에는 전체 Bronze 원본 키의 해시를 넣는다. 다른 �
 - 페이지 기준 1,000건마다, 구간 전환·완료 시, 종료 시 체크포인트를 저장한다.
 - 전송 후 DB 저장 전에 중단되면 중복 발행은 가능하다. 정확히 한 번 전송을 보장하는 구조는 아니다.
 - 앱별로 Kafka hook을 분리하며, 일부 앱 실패도 수집 task 실패로 처리한다.
-- Bronze DAG는 `max_active_runs=1`이다. 수집 task가 실패해도 `all_done`으로 Kafka→Bronze task를 실행해 이미 발행한 데이터를 처리한다.
-- Spark는 트리거당 최대 10,000개 offset을 읽도록 설정했다. 대량 backfill을 한 번에 driver 메모리로 모으는 것을 줄인다. [Spark 공식 옵션](https://spark.apache.org/docs/latest/structured-streaming-kafka-integration.html)
+- Bronze DAG는 `max_active_runs=1`이다.
+- 수집 task가 실패해도 `all_done`으로 Kafka→Bronze task를 실행해 이미 발행한 데이터를 처리한다.
+- 2026-11 Spark consumer를 `KafkaTopicToS3Operator`로 대체했다. 실행 시작 시점의 끝 offset까지 읽고, 1만 건 묶음마다 S3 업로드 성공 후 offset을 commit한다. 업로드 후 commit 전 중단 시 같은 묶음이 다시 저장될 수 있어 Silver ID 중복 제거가 필요하다.
 - Silver DAG는 `reviews/` 전체를 조회한다. 지연된 Bronze 파일을 날짜별 실행 prefix 때문에 놓치지 않게 한다. 현재는 전체 조회·재처리 비용이 발생하므로 향후 원본 처리 목록을 관리하는 최적화가 필요하다.
 
 ## 확인한 범위
@@ -77,6 +78,8 @@ Silver 파일명에는 전체 Bronze 원본 키의 해시를 넣는다. 다른 �
 테스트 환경: Python 3.12, pytest 9.1.1, Polars 2.0.0, kafka-python 3.0.11. 운영 환경 의존성과의 통합 확인은 별도로 필요하다.
 
 ### 2026-10-16 Docker 런타임 검증
+
+> 당시 코드 기준 기록이다. 아래 Kafka → Spark → MinIO 적재 통합 테스트는 2026-11 같은 파일명(`test_reviews_kafka_to_s3_integration.py`)으로 `KafkaTopicToS3Operator` 기준으로 다시 작성했다. 형태소 오프라인 테스트 3개는 삭제했고 consumer 오프라인 테스트 23개를 추가해 현재 60개다. 2026-11-22 검증 결과는 아래 [2026-11-22 재구성 후 런타임 검증](#2026-11-22-재구성-후-런타임-검증)에 있다.
 
 - 대상: `1c2fa66` 기반 작업 트리. 통합 테스트에 전용 Kafka 토픽 격리와 다중 청크 검증을 추가한 상태이며 아직 커밋하지 않았다. 운영 Hook·Operator·DAG 코드는 변경하지 않았다.
 - 환경: `airflow-scheduler` 컨테이너, Python 3.10.13, Airflow 2.8.1, pytest 9.1.1, Polars 1.43.2, kafka-python 3.0.11, PySpark 4.2.0.
@@ -96,6 +99,22 @@ Silver 파일명에는 전체 Bronze 원본 키의 해시를 넣는다. 다른 �
 docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python -m pytest /opt/airflow/tests/integration/operators/test_review_checkpoint_resume_integration.py -m integration -v -rs --junitxml=/opt/airflow/logs/review_checkpoint_integration_20261016.xml
 docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python -m pytest /opt/airflow/tests/integration/operators/test_reviews_kafka_to_s3_integration.py -m integration -v -rs --junitxml=/opt/airflow/logs/review_kafka_spark_s3_integration_20261016.xml
 docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python -m pytest --confcutdir=/opt/airflow/tests/offline /opt/airflow/tests/offline -q --junitxml=/opt/airflow/logs/review_offline_20261016.xml
+```
+
+### 2026-11-22 재구성 후 런타임 검증
+
+- 대상: 재구성 1단계 `2d58411`(형태소·Spark 제거, SeaweedFS 교체) 위의 2단계 작업 트리(`KafkaTopicToS3Operator`). 기존 `steam_analysis` Compose 프로젝트 볼륨을 그대로 사용했다.
+- 환경: Docker 29.9.2, 재빌드한 `steam-airflow` 이미지(JDK 없음), Python 3.10.13, Airflow 2.8.1, Polars 2.0.0, kafka-python 3.0.13, SeaweedFS 4.52.
+- 저장소: SeaweedFS health check 통과. `seaweedfs-init` 1회차에 버킷 3개 생성, 2회차에 모두 건너뜀. `s3_storage`·`analytics_db`·`kafka_default` 연결이 환경변수로 자동 등록됐고 `s3_storage_smoke_test` 업로드 성공. DAG import 오류 없음.
+- 오프라인 전체: 같은 컨테이너에서 **60 passed**.
+- 통합: consumer 적재와 체크포인트 재개 **2 passed**. consumer 테스트는 묶음당 1건으로 청크 2개, ID 집합·appid·언어, 같은 group 재실행 시 0건 소비를 확인했다. 테스트 토픽과 S3 prefix는 종료 후 정리됐다.
+- 발견·수정: 첫 통합 실행에서 poll 1회가 2건을 반환해 `max_records_per_flush=1`인데도 한 묶음으로 저장됐다. poll 요청 수를 남은 묶음 용량으로 제한하도록 고치고, 고치기 전 코드에서 실패하는 오프라인 회귀 테스트를 추가했다.
+- 관찰: 새 consumer group의 첫 commit 무렵 kafka-python이 `NotCoordinatorError` 경고를 반복 출력했지만 재실행 0건 소비로 commit 성공을 확인했다. 테스트용 consumer group 메타데이터는 Kafka 보관 기간 후 자동 삭제된다.
+- 범위 밖: 실제 Steam API 호출, 리뷰 DAG 전체 실행, 대량 메시지, 컨테이너 강제 종료 중 재개.
+
+```sh
+docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python -m pytest --confcutdir=/opt/airflow/tests/offline /opt/airflow/tests/offline -q
+docker exec airflow-scheduler env PYTHONPATH=/opt/airflow/plugins python -m pytest /opt/airflow/tests/integration/operators/test_reviews_kafka_to_s3_integration.py /opt/airflow/tests/integration/operators/test_review_checkpoint_resume_integration.py -m integration -v -rs
 ```
 
 ### 2026-10-16 실제 Steam 날짜 필터 소량 검증

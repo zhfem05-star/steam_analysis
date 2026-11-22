@@ -4,6 +4,8 @@
 Bronze -> Silver -> Gold/Mart 순서로, 하위 레이어가 의존하는 순서대로 진행.
 챕터 하나가 끝나면 `type(chN): description` 형식으로 커밋한다.
 
+> 2026-11 파이프라인 재구성으로 이후 작업 순서는 [재구성 계획](pipeline_plan.md)을 따른다. 아래 항목 중 형태소·Spark 관련 파일은 제거되어 검수 대상에서 빠졌다.
+
 ## ch1. Bronze - 수집 훅/오퍼레이터
 
 - [ ] `plugins/hooks/steam_api.py` - appreviews/appdetails 파라미터, 커서 페이지네이션 로직 검수
@@ -14,7 +16,7 @@ Bronze -> Silver -> Gold/Mart 순서로, 하위 레이어가 의존하는 순서
 - [ ] `plugins/operators/steam_api_to_s3.py`
 - [ ] `plugins/operators/steam_app_details_to_s3.py`
 - [ ] `plugins/operators/steam_players_to_s3.py`
-- [ ] `plugins/operators/steam_reviews_to_kafka.py` / `spark_reviews_kafka_to_s3.py`
+- [ ] `plugins/operators/steam_reviews_to_kafka.py` (`spark_reviews_kafka_to_s3.py`는 2026-11 제거)
 - [ ] `plugins/operators/upsert_tracked_games.py` - 컨트롤 테이블 upsert 로직
 - [ ] `dags/bronze_api_extract_*.py` 4개 - 스케줄/의존성 확인
 
@@ -30,13 +32,12 @@ Bronze -> Silver -> Gold/Mart 순서로, 하위 레이어가 의존하는 순서
 
 ## ch3. Gold/Mart
 
-- [ ] `plugins/operators/gold_reviews_to_morphemes.py`
-- [ ] `dags/gold_dbt_marts_DAG.py`, `dags/gold_morphemes_DAG.py`
+- [ ] `dags/gold_dbt_marts_DAG.py` (형태소 operator·DAG는 2026-11 제거)
 - [ ] dbt 프로젝트 (mart_* 6개 모델)
 
 ## ch4. 인프라/운영
 
-- [ ] `plugins/hooks/snowflake_hook.py`, `plugins/hooks/spark_hook.py`
+- [ ] `plugins/hooks/snowflake_hook.py` (`spark_hook.py`는 2026-11 제거)
 - [ ] `plugins/callbacks/slack_callback.py`
 - [ ] DB 이중화/failover (`DB_FAILOVER_RUNBOOK.txt`, replica 설정)
 - [x] `# Steam Store API review (비공식).txt` 문서 최신화 (이번에 확인한 실제 기본값 반영)
@@ -53,7 +54,7 @@ Bronze -> Silver -> Gold/Mart 순서로, 하위 레이어가 의존하는 순서
 - [x] Small Steam probe: positive start_date works; zero can disable date filtering.
 - [x] 2026-10-16 live Steam: CS2 English fixed 10-minute range, 3 distinct reviews; bounds, descending order and collector completion verified (1 passed). This does not establish full-history completeness.
 - [x] 2026-10-16 Docker: fixed-input Kafka/Postgres checkpoint integration and Kafka/Spark/MinIO multi-batch delivery (2 passed); offline suite in the same container (40 passed). See [runtime evidence](review_checkpoints.md#2026-10-16-docker-런타임-검증).
-- [ ] Real Postgres/Kafka/Spark/MinIO restart and failure integration tests.
+- [ ] Real Postgres/Kafka/SeaweedFS restart and failure integration tests (Spark·MinIO는 2026-11 제거·교체).
 - [ ] Real collection beyond 100,000 reviews; compare distinct IDs and boundary timestamps.
 - [ ] Verify broker retention covers backfill duration and benchmark full-history Silver scans.
 

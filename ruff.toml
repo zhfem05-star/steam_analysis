@@ -1,0 +1,17 @@
+# Ruff 린트 설정 (CI와 로컬 공통)
+# Airflow 이미지 Python 3.10 기준
+
+target-version = "py310"
+
+[lint]
+select = ["DJ", "F", "E", "W", "I", "B", "S"]
+# E501: 줄 길이는 포맷 단계에서 관리
+# I001: 저장소의 airflow/ 디렉터리 때문에 airflow 패키지가 first-party로 오인되어 정렬 판정이 불안정
+# W291·W292·W293: 공백·파일 끝 줄바꿈은 기존 파일 전반에 남아 있어 별도 정리 전까지 제외
+ignore = ["E501", "I001", "W291", "W292", "W293"]
+
+[lint.per-file-ignores]
+# S101: pytest는 assert로 검증
+# S108: 테스트용 임시 AIRFLOW_HOME 경로
+# S311: 테스트 appid 생성용 난수 (보안 용도 아님)
+"tests/**" = ["S101", "S108", "S311"]

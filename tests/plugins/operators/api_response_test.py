@@ -27,7 +27,7 @@ params = {
             }
 
 
-resp = requests.get(url = url,params=params)
+resp = requests.get(url = url,params=params, timeout=30)
 
 
 result = resp.json()

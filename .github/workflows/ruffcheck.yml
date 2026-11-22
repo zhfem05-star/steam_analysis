@@ -1,4 +1,4 @@
-name: Ruff django Lint Check
+name: Ruff Lint Check
 on: [ push, pull_request ]
 jobs:
   ruff:
@@ -9,5 +9,7 @@ jobs:
       - name: Run Ruff Linting
         uses: astral-sh/ruff-action@v3
         with:
-          args: check --select DJ,F,E,W,I,B,S --ignore E501,I001,W293,W291,W292
+          # 규칙은 저장소 루트 ruff.toml에서 관리. 로컬 검사와 같은 버전으로 고정
+          version: "0.17.5"
+          args: check
           pass-with-no-files: true

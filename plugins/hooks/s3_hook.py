@@ -1,7 +1,7 @@
 """
 Steam 프로젝트 전용 S3 Hook
 
-MinIO(로컬)와 AWS S3(운영) 모두 동일한 인터페이스로 사용 가능.
+SeaweedFS(로컬)와 AWS S3(운영) 모두 동일한 인터페이스로 사용 가능.
 aws_conn_id만 변경하면 환경 전환 완료.
 """
 
@@ -18,10 +18,10 @@ BUCKET_PROCESSED = "steam-processed"
 
 class SteamS3Hook:
     """
-    S3/MinIO 업로드·다운로드를 위한 프로젝트 전용 Hook
+    S3 호환 저장소 업로드·다운로드를 위한 프로젝트 전용 Hook
     """
 
-    def __init__(self, aws_conn_id: str = "minio_s3"):
+    def __init__(self, aws_conn_id: str = "s3_storage"):
         """
         :param aws_conn_id: Airflow에 설정된 S3 연결 ID
         :return: None

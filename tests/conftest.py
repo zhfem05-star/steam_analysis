@@ -21,9 +21,9 @@ os.environ.setdefault("AIRFLOW__CORE__LOAD_EXAMPLES", "False")
 os.environ.setdefault("AIRFLOW__CORE__UNIT_TEST_MODE", "True")
 
 # airflow를 import하는 아래 두 모듈은 반드시 위 환경변수 설정 이후에 와야 함
-from hooks.s3_hook import SteamS3Hook
-from hooks.kafka_hook import SteamKafkaHook
-from airflow.providers.postgres.hooks.postgres import PostgresHook
+from hooks.s3_hook import SteamS3Hook  # noqa: E402
+from hooks.kafka_hook import SteamKafkaHook  # noqa: E402
+from airflow.providers.postgres.hooks.postgres import PostgresHook  # noqa: E402
 
 
 @pytest.fixture

@@ -119,7 +119,8 @@ def test_invalid_date_response_never_completes(bad):
             yield bad, "next"
     it = collector().pages(1,"english",None,BadAPI())
     assert not next(it).checkpoint["completed"]
-    with pytest.raises(ValueError): list(it)
+    with pytest.raises(ValueError):
+        list(it)
 
 
 def test_dense_timestamp_fails_instead_of_silently_skipping():

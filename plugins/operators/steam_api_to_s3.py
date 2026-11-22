@@ -1,7 +1,7 @@
 """
 Steam API → S3 커스텀 오퍼레이터
 
-Steam API를 호출하고 응답 JSON을 S3(MinIO)에 저장한다.
+Steam API를 호출하고 응답 JSON을 S3 저장소에 저장한다.
 API 호출은 SteamApiHook, S3 업로드는 S3Hook에 위임.
 """
 
@@ -34,7 +34,7 @@ class SteamApiToS3Operator(BaseOperator):
         s3_key: str,
         method_params: dict | None = None,
         s3_bucket: str = BUCKET_RAW,
-        aws_conn_id: str = "minio_s3",
+        aws_conn_id: str = "s3_storage",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -59,7 +59,7 @@ class SteamApiToS3Operator(BaseOperator):
                 f"API 응답이 None입니다: method={self.method} params={self.method_params}"
             )
 
-        # 2) S3(MinIO)에 업로드
+        # 2) S3 저장소에 업로드
         try:
             s3_hook = SteamS3Hook(aws_conn_id=self.aws_conn_id)
             s3_hook.upload_json(data=data, key=self.s3_key, bucket=self.s3_bucket)

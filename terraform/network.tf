@@ -10,7 +10,7 @@ resource "google_compute_subnetwork" "private" {
   network       = google_compute_network.vpc.id
 
   # GKE Pod/Service용 secondary range.
-  # Kafka/Spark가 나중에 Pod로 늘어날 걸 감안해 넉넉하게 잡아둠.
+  # Kafka가 나중에 Pod로 늘어날 걸 감안해 넉넉하게 잡아둠.
   secondary_ip_range {
     range_name    = "gke-pods"
     ip_cidr_range = "10.20.0.0/14"

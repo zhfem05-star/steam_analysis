@@ -3,13 +3,12 @@ Steam 리뷰 원본 데이터 수집 DAG
 
 tracked_games 컨트롤 테이블에서 app_id를 조회하여 한국어·영어 리뷰를 전체 수집한다.
 
-수집 구조 (producer-consumer를 Kafka로 연결, 기존 in-memory queue.Queue를 대체):
+수집 구조 (producer-consumer를 Kafka로 연결):
   1. collect_reviews (producer) : Steam API → Kafka 토픽(steam-reviews) 발행
-  2. publish_reviews_to_s3 (consumer) : Spark Structured Streaming이 Kafka를 소비하여
-     기존과 동일한 MinIO(steam-raw) Bronze 구조로 저장
+  2. publish_reviews_to_s3 (consumer) : 실행 시점까지 쌓인 메시지를 appid별 Parquet으로
+     S3 저장소(steam-raw)에 저장 후 offset commit
 
-저장 경로: reviews/{YYYYMMDD_HHMM}/{appid}_chunk_{N:03d}.parquet
-(하위 파이프라인은 이 변경을 몰라도 될 만큼 기존 구조를 그대로 유지한다.)
+저장 경로: reviews/{YYYYMMDD_HHMM}/{appid}_chunk_{묶음 토큰}.parquet
 """
 
 from datetime import datetime
@@ -17,13 +16,13 @@ from datetime import datetime
 from airflow import DAG
 
 from callbacks.slack_callback import slack_fail_alert
+from operators.kafka_topic_to_s3 import KafkaTopicToS3Operator
 from operators.steam_reviews_to_kafka import SteamReviewsToKafkaOperator
-from operators.spark_reviews_kafka_to_s3 import SparkReviewsKafkaToS3Operator
 
 
 with DAG(
     dag_id="steam_bronze_02_review_extract",
-    description="Steam API → Kafka → Spark → MinIO(steam-raw) 게임 리뷰 원본 데이터 수집 (한국어·영어)",
+    description="Steam API → Kafka → S3(steam-raw) 게임 리뷰 원본 데이터 수집 (한국어·영어)",
     schedule="0 8 * * *",      # 매일 08:00 UTC (한국시간 오후 5시)
     start_date=datetime(2025, 1, 1),
     catchup=False,
@@ -48,11 +47,14 @@ with DAG(
         # filter_type  : "recent"(최신순) | "all"(Steam 추천순) | "updated"(최근 수정순). 기본값 "recent"
     )
 
-    publish_reviews_to_s3 = SparkReviewsKafkaToS3Operator(
+    # 수집 task가 일부 실패해도 이미 발행한 메시지는 저장하도록 all_done 사용
+    publish_reviews_to_s3 = KafkaTopicToS3Operator(
         task_id="publish_reviews_to_s3",
         trigger_rule="all_done",
         kafka_topic="steam-reviews",
+        consumer_group_id="steam-reviews-to-s3",
         s3_key_prefix="reviews/{{ execution_date.strftime('%Y%m%d_%H%M') }}",
+        partition_by="appid",
     )
 
     collect_reviews >> publish_reviews_to_s3

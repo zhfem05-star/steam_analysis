@@ -4,7 +4,7 @@ Bronze reviews parquet → Silver S3 파티셔닝 오퍼레이터
 S3 Bronze의 리뷰 parquet 청크 파일들을 읽어 변환한 뒤
 Silver 버킷에 appid / language / year / month 기준으로 파티셔닝하여 저장
 
-Bronze 구조:  reviews/{YYYYMMDD_HHMM}/{appid}_chunk_{N:03d}.parquet
+Bronze 구조:  reviews/{YYYYMMDD_HHMM}/{appid}_chunk_{묶음 토큰}.parquet
 Silver 구조:  reviews/appid={appid}/language={lang}/year={Y}/month={M}/{filename}.parquet
 
 파티션 키에 language를 포함하므로 경로만으로 언어 구분 가능:
@@ -48,7 +48,7 @@ class SilverReviewsToS3Operator(BaseOperator):
         self,
         bronze_prefix: str,
         silver_prefix: str = "reviews",
-        aws_conn_id: str = "minio_s3",
+        aws_conn_id: str = "s3_storage",
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -72,7 +72,7 @@ class SilverReviewsToS3Operator(BaseOperator):
             df = s3_hook.read_parquet(key=key, bucket=BUCKET_RAW)
             df = self._transform(df)
 
-            filename = self._source_filename(key)  # {appid}_chunk_{N:03d}.parquet
+            filename = self._source_filename(key)  # {원본 키 해시}_{appid}_chunk_{토큰}.parquet
 
             # appid + language + year + month 로 그룹화하여 파티션 경로에 저장
             for (appid_val, lang, year, month), group_df in df.group_by(

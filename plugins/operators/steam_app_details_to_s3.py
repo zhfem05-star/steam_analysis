@@ -3,14 +3,13 @@ Steam 앱 상세 정보 수집 → S3 저장 오퍼레이터
 
 tracked_games 컨트롤 테이블의 is_active=TRUE인 app_id를 조회하여
 appdetails API에서 게임 정보(이름, 장르, 플랫폼 등)를 수집하고
-MinIO(S3) steam-raw 버킷에 Parquet 형태로 저장한다.
+S3 저장소 steam-raw 버킷에 Parquet 형태로 저장한다.
 
 저장 경로: {s3_key_prefix}/{appid}.parquet
 """
 
 from __future__ import annotations
 
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -53,7 +52,7 @@ class SteamAppDetailsToS3Operator(BaseOperator):
         language: str = "korean",
         postgres_conn_id: str = "analytics_db",
         s3_bucket: str = BUCKET_RAW,
-        aws_conn_id: str = "minio_s3",
+        aws_conn_id: str = "s3_storage",
         **kwargs,
     ):
         super().__init__(**kwargs)

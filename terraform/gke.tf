@@ -83,35 +83,3 @@ resource "google_container_node_pool" "kafka" {
     }
   }
 }
-
-# Spark executor 배치용 노드풀. 배치성 워크로드라 오토스케일링 폭을 크게 잡음.
-resource "google_container_node_pool" "spark" {
-  name     = "spark-pool"
-  cluster  = google_container_cluster.main.name
-  location = var.zone
-
-  autoscaling {
-    min_node_count = 0
-    max_node_count = 5
-  }
-
-  node_config {
-    machine_type    = "e2-standard-8"
-    service_account = google_service_account.gke_nodes.email
-    oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
-
-    labels = {
-      workload = "spark"
-    }
-
-    taint {
-      key    = "workload"
-      value  = "spark"
-      effect = "NO_SCHEDULE"
-    }
-
-    workload_metadata_config {
-      mode = "GKE_METADATA"
-    }
-  }
-}

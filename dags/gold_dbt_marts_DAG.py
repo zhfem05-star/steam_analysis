@@ -14,7 +14,6 @@ from datetime import datetime
 
 from airflow import DAG
 from airflow.providers.docker.operators.docker import DockerOperator
-from docker.types import Mount
 
 from callbacks.slack_callback import slack_fail_alert
 

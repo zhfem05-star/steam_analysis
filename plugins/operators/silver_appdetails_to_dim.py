@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-import polars as pl
 from airflow.models import BaseOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
@@ -56,7 +55,7 @@ class SilverAppDetailsToDimOperator(BaseOperator):
         s3_key_prefix: str,
         postgres_conn_id: str = "analytics_db",
         s3_bucket: str = BUCKET_RAW,
-        aws_conn_id: str = "minio_s3",
+        aws_conn_id: str = "s3_storage",
         **kwargs,
     ):
         super().__init__(**kwargs)
