@@ -75,20 +75,19 @@ logs/                      로컬 로그·JUnit 결과 (Git 제외)
 
 2026-10-16 기존 Docker 환경에서 Python **3.10.13**, Airflow **2.8.1**, Polars **1.43.2**, PySpark **4.2.0**, kafka-python **3.0.11**, pytest **9.1.1**, PostgreSQL **15.15**로 아래 검증을 실행했다. DB 실험은 psycopg2-binary **2.9.9**를 사용했다. 당시 이미지에 있던 PySpark와 JDK 17은 2026-11 Spark 제거와 함께 빠졌다.
 
-Docker Desktop의 Linux 컨테이너와 Docker Compose가 필요하다. S3 호환 저장소는 SeaweedFS **4.52** 이미지로 고정했다. 그 밖의 일부 이미지와 추가 Python 패키지는 버전 미고정이며 재빌드 시 환경이 달라질 수 있다. 2026-11-22 기존 볼륨이 있는 환경에서 SeaweedFS 기동, 버킷 초기화 재실행, 연결 자동 등록과 `s3_storage_smoke_test` 업로드를 확인했다.
+Docker Desktop의 Linux 컨테이너와 Docker Compose가 필요하다. S3 호환 저장소는 SeaweedFS **4.52**, Kafka는 **4.3.1** 이미지로 고정했다. 추가 Python 패키지는 2026-11-26부터 `airflow/Dockerfile`에서 버전을 고정해 이미지에 설치한다(polars **2.0.0**, kafka-python **3.0.13**, pytest **9.2.0** 등). 이전에는 컨테이너 기동마다 pip로 설치했다. 2026-11-22 기존 볼륨이 있는 환경에서 SeaweedFS 기동, 버킷 초기화 재실행, 연결 자동 등록과 `s3_storage_smoke_test` 업로드를 확인했다.
+
+컨테이너 포트는 모두 `127.0.0.1`에만 연다. 같은 PC에서는 `localhost`로 접속하고, 서버에서는 SSH 터널로 접속한다([AWS 이관 계획](docs/aws_migration_plan.md)).
 
 ### 환경변수와 Airflow 설정
 
-루트에 `.env`를 직접 만든다. 현재 `.env.example`은 없다. 실제 키·비밀번호는 Git에 넣지 않는다.
+`.env.example`을 `.env`로 복사해 값을 채운다. 실제 키·비밀번호는 Git에 넣지 않는다.
 
-```dotenv
-STEAM_API_KEY=<Steam API key>
-SLACK_WEBHOOK_URL=
-REPLICATOR_PASSWORD=<local replication password>
-# 선택: 미설정 시 로컬 기본값 steamadmin / steamadmin-secret
-S3_ACCESS_KEY=
-S3_SECRET_KEY=
+```sh
+cp .env.example .env
 ```
+
+Fernet 키, Airflow 메타DB·분석 DB 계정, Airflow 관리자 계정은 Compose에 기본값이 없어 `.env`에 없으면 기동이 거부된다. 공개 저장소에 비밀 값이 남지 않게 하려는 설정이다. 서버는 로컬과 다른 새 값을 쓴다. `S3_ACCESS_KEY`·`S3_SECRET_KEY`는 비우면 로컬 기본값 `steamadmin` / `steamadmin-secret`을 쓴다.
 
 `S3_ACCESS_KEY`·`S3_SECRET_KEY`는 SeaweedFS 관리자 키와 Airflow `s3_storage` 연결에 같이 쓰인다. 연결 URI에 들어가므로 `@`, `:`, `/` 같은 문자를 쓰려면 URL 인코딩이 필요하다.
 
@@ -109,6 +108,8 @@ Airflow UI의 Admin에서 아래 항목을 확인한다.
 
 ### 1. 이미지·DB·버킷 준비
 
+Windows Docker Desktop에서 `docker compose build`가 `additional privileges requested` 오류로 멈추면 같은 이미지를 `docker build -t steam-airflow:latest airflow`로 빌드한다(2026-11-26 확인).
+
 ```sh
 docker compose -p steam-project -f docker-compose-local.yml build airflow-scheduler
 docker compose -p steam-project -f docker-compose-local.yml --profile dbt build dbt
@@ -121,7 +122,7 @@ docker compose -p steam-project -f docker-compose-local.yml ps
 
 DB 초기 SQL은 분석 DB 볼륨을 처음 생성할 때 적용된다. `seaweedfs-init`은 `steam-raw`, `steam-silver`, `steam-processed` 버킷이 없을 때만 만든다. Airflow 초기화 후 위 Variable을 등록하고 서비스 health와 DAG import 오류를 확인한다. 저장소 연결은 `s3_storage_smoke_test` DAG를 수동 실행해 확인할 수 있다. 복제 실습은 별도로 `analytics-postgres-replica`를 시작하고 [failover 절차](DB_FAILOVER_RUNBOOK.txt)를 따른다.
 
-- Airflow: <http://localhost:8080>, 계정은 Compose의 `airflow-init` 설정 참조
+- Airflow: <http://localhost:8080>, 계정은 `.env`의 `AIRFLOW_ADMIN_USER`·`AIRFLOW_ADMIN_PASSWORD`
 - SeaweedFS Filer UI(버킷·파일 탐색): <http://localhost:8888>, S3 API: <http://localhost:8333>, Master UI: <http://localhost:9333>
 - 분석 DB: host `localhost`, port `5434`, database `steam_analytics`
 
@@ -142,6 +143,8 @@ DAG는 처음 생성할 때 pause 상태다. 선행 작업의 **성공과 출력
 3. `steam_silver_01_dim_games`, `steam_silver_02_fact_price`, `steam_silver_03_fact_reviews`: 각 Bronze 입력 정제·적재.
 4. `steam_silver_05_review_daily`, `steam_silver_06_review_playtime`: Silver 리뷰 전체에서 중복 제거 후 일별 집계.
 5. `steam_gold_02_dbt_marts`: DAG 내부의 `dbt_staging` → `dbt_marts` 순서로 분석 마트 생성.
+
+별도로 `maintenance_01_log_cleanup`이 매일 03:20 UTC에 보관 기간(Variable `log_retention_days`, 기본 14일)이 지난 task 로그를 삭제한다.
 
 일일 스케줄은 대체로 Bronze 08~09 UTC, Silver 09~10 UTC, dbt 12 UTC다. 동접자는 매시 정각, 스캔은 21 UTC다. 한국시간은 UTC+9이며 정확한 스케줄은 `dags/`를 참조한다. **다른 DAG 사이에는 완료를 기다리는 의존성이 없어 시각 배치만으로 위 순서가 보장되지 않는다.** 리뷰를 제외한 일부 Silver는 logical date의 일자 prefix를 읽으므로 수동 실행 시 대응하는 Bronze 날짜와 맞춰야 한다.
 
@@ -170,7 +173,7 @@ docker compose -p steam-project -f docker-compose-local.yml down
 
 ## 테스트 실행과 검증 결과
 
-아래는 **2026-10-16 당시 코드 사후 검증** 결과다. 2026-11 재구성으로 형태소 오프라인 테스트 3개를 제거하고 consumer 테스트 23개, 게임 목록·가격 테스트 21개, 동접자 테스트 15개를 추가해, 현재 오프라인 테스트는 96개다(2026-11-22 96 passed). 게임 목록·가격과 동접자 DAG의 실제 실행 결과는 [재구성 계획](docs/pipeline_plan.md)의 8·9절에 있다. 아래 수치와 명령은 당시 기록으로 남긴다. 대상 버전·입력·기대값·환경·미검증 범위는 [검증 기록](docs/review_checkpoints.md)에 있다. 컨테이너에 루트 `pytest.ini`가 마운트되지 않아 `PYTHONPATH`를 명시하며 미등록 integration marker 경고가 날 수 있다.
+아래는 **2026-10-16 당시 코드 사후 검증** 결과다. 2026-11 재구성으로 형태소 오프라인 테스트 3개를 제거하고 consumer 테스트 23개, 게임 목록·가격 테스트 21개, 동접자 테스트 15개, 로그 정리 테스트 4개를 추가해, 현재 오프라인 테스트는 100개다(2026-11-26 100 passed). 게임 목록·가격과 동접자 DAG의 실제 실행 결과는 [재구성 계획](docs/pipeline_plan.md)의 8·9절에 있다. 아래 수치와 명령은 당시 기록으로 남긴다. 대상 버전·입력·기대값·환경·미검증 범위는 [검증 기록](docs/review_checkpoints.md)에 있다. 컨테이너에 루트 `pytest.ini`가 마운트되지 않아 `PYTHONPATH`를 명시하며 미등록 integration marker 경고가 날 수 있다.
 
 ### 오프라인: 40 passed
 

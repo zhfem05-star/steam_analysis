@@ -2,7 +2,11 @@
 # Steam 게임 분석 프로젝트 - 로컬 개발 환경
 # ============================================================
 # 구성: Airflow + PostgreSQL(메타DB & 분석DB) + SeaweedFS(S3 호환 저장소) + Kafka
-# 실행: docker-compose up -d
+# 실행: docker compose -f docker-compose-local.yml up -d
+# 서버: docker compose -f docker-compose-local.yml -f docker-compose-server.yml up -d
+# ============================================================
+# 비밀 값(Fernet 키·DB·관리자 계정)은 .env에서만 읽음. 값이 없으면 기동 거부
+# 포트는 127.0.0.1에만 바인딩해 같은 PC·서버 밖에서 접근하지 못하게 함
 # ============================================================
 
 x-airflow-common: &airflow-common
@@ -11,17 +15,19 @@ x-airflow-common: &airflow-common
     dockerfile: Dockerfile
   image: steam-airflow:latest
   environment: &airflow-common-env
-    # 추가 패키지 설치 (컨테이너 기동 시 자동 pip install)
-    _PIP_ADDITIONAL_REQUIREMENTS: "polars pyarrow apache-airflow-providers-docker kafka-python pytest apache-airflow-providers-snowflake"
+    # Python 패키지는 airflow/Dockerfile에서 버전 고정 설치 (기동마다 pip install 하지 않음)
 
     # Airflow 기본 설정
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-    AIRFLOW__CORE__FERNET_KEY: 'ZmRkNjQ2OTBkZjBkNGI2NDg0MjU0NjY2ZjU2NzYwZGY='
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?.env에 AIRFLOW_FERNET_KEY 필요}
+    # 동시 실행 상한: 동시 task는 최대 2개 수준이라 메모리 급증 방지용으로 낮춤 (기본 32·16)
+    AIRFLOW__CORE__PARALLELISM: '4'
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: '2'
 
     # Airflow 메타DB (PostgreSQL)
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:?.env에 AIRFLOW_DB_USER 필요}:${AIRFLOW_DB_PASSWORD:?.env에 AIRFLOW_DB_PASSWORD 필요}@airflow-postgres:5432/${AIRFLOW_DB_NAME:?.env에 AIRFLOW_DB_NAME 필요}
 
     # 주의: Airflow 커넥션 환경변수는 AIRFLOW_CONN_<ID> (싱글 언더스코어) 형식이어야 인식됨
 
@@ -31,7 +37,7 @@ x-airflow-common: &airflow-common
       aws://${S3_ACCESS_KEY:-steamadmin}:${S3_SECRET_KEY:-steamadmin-secret}@/?endpoint_url=http%3A%2F%2Fseaweedfs%3A8333&region_name=us-east-1
 
     # 분석용 PostgreSQL 연결 (나중에 Snowflake로 교체)
-    AIRFLOW_CONN_ANALYTICS_DB: postgres://analytics:analytics@analytics-postgres:5432/steam_analytics
+    AIRFLOW_CONN_ANALYTICS_DB: postgres://${ANALYTICS_DB_USER:?.env에 ANALYTICS_DB_USER 필요}:${ANALYTICS_DB_PASSWORD:?.env에 ANALYTICS_DB_PASSWORD 필요}@${ANALYTICS_DB_HOST:-analytics-postgres}:5432/${ANALYTICS_DB_NAME:?.env에 ANALYTICS_DB_NAME 필요}
 
     # Steam API Key (실행 시 .env 파일에서 로드)
     STEAM_API_KEY: ${STEAM_API_KEY}
@@ -70,15 +76,15 @@ services:
     image: postgres:15-alpine
     container_name: airflow-postgres
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
+      POSTGRES_USER: ${AIRFLOW_DB_USER:?.env에 AIRFLOW_DB_USER 필요}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:?.env에 AIRFLOW_DB_PASSWORD 필요}
+      POSTGRES_DB: ${AIRFLOW_DB_NAME:?.env에 AIRFLOW_DB_NAME 필요}
     volumes:
       - airflow_pg_data:/var/lib/postgresql/data
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       retries: 5
       start_period: 5s
@@ -90,9 +96,9 @@ services:
     image: postgres:15-alpine
     container_name: analytics-postgres
     environment:
-      POSTGRES_USER: analytics
-      POSTGRES_PASSWORD: analytics
-      POSTGRES_DB: steam_analytics
+      POSTGRES_USER: ${ANALYTICS_DB_USER:?.env에 ANALYTICS_DB_USER 필요}
+      POSTGRES_PASSWORD: ${ANALYTICS_DB_PASSWORD:?.env에 ANALYTICS_DB_PASSWORD 필요}
+      POSTGRES_DB: ${ANALYTICS_DB_NAME:?.env에 ANALYTICS_DB_NAME 필요}
       REPLICATOR_PASSWORD: ${REPLICATOR_PASSWORD}
     command: >
       postgres
@@ -105,9 +111,9 @@ services:
       - ./init-db:/docker-entrypoint-initdb.d  # 초기 테이블 생성
       - ./init-db-replication/00-setup-replication.sh:/docker-entrypoint-initdb.d/00-setup-replication.sh
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "analytics", "-d", "steam_analytics"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       retries: 5
       start_period: 5s
@@ -128,9 +134,9 @@ services:
       analytics-postgres:
         condition: service_healthy
     ports:
-      - "5435:5432"
+      - "127.0.0.1:5435:5432"
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "analytics"]
+      test: ["CMD", "pg_isready", "-U", "${ANALYTICS_DB_USER:?.env에 ANALYTICS_DB_USER 필요}"]
       interval: 10s
       retries: 5
       start_period: 20s
@@ -149,9 +155,9 @@ services:
     volumes:
       - seaweedfs_data:/data
     ports:
-      - "8333:8333"   # S3 API
-      - "9333:9333"   # Master UI
-      - "8888:8888"   # Filer UI (버킷·파일 탐색)
+      - "127.0.0.1:8333:8333"   # S3 API
+      - "127.0.0.1:9333:9333"   # Master UI
+      - "127.0.0.1:8888:8888"   # Filer UI (버킷·파일 탐색)
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8333/healthz"]
       interval: 10s
@@ -183,9 +189,13 @@ services:
   # 3-1. Kafka (KRaft 모드 — Zookeeper 없이 단일 브로커)
   # ============================================================
   kafka:
-    image: apache/kafka:latest
+    image: apache/kafka:4.3.1   # latest 대신 고정: 재배포 시 예고 없는 버전 변경 방지
     container_name: kafka
     environment:
+      # 이미지 기본값은 -Xmx1G -Xms1G (기동 즉시 1GB). 256MB로 충분 (2026-11-26 실측 컨테이너 약 500MB)
+      KAFKA_HEAP_OPTS: "-Xmx256m -Xms256m"
+      # 이미지 기본값 /tmp/kafka-logs는 볼륨 밖이라 컨테이너 재생성 시 토픽·consumer offset 유실
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
@@ -201,7 +211,7 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
     ports:
-      - "9094:9094"   # 호스트에서 직접 접속용
+      - "127.0.0.1:9094:9094"   # 호스트에서 직접 접속용
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
       interval: 10s
@@ -214,14 +224,18 @@ services:
   airflow-init:
     <<: *airflow-common
     container_name: airflow-init
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:?.env에 AIRFLOW_ADMIN_USER 필요}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?.env에 AIRFLOW_ADMIN_PASSWORD 필요}
     entrypoint: /bin/bash
     command:
       - -c
       - |
         airflow db init
         airflow users create \
-          --username admin \
-          --password admin \
+          --username "$${AIRFLOW_ADMIN_USER}" \
+          --password "$${AIRFLOW_ADMIN_PASSWORD}" \
           --firstname Admin \
           --lastname User \
           --role Admin \
@@ -237,7 +251,7 @@ services:
     container_name: airflow-webserver
     command: webserver
     ports:
-      - "8080:8080"   # Airflow UI
+      - "127.0.0.1:8080:8080"   # Airflow UI (서버는 SSH 터널로 접속)
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s

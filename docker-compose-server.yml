@@ -1,0 +1,33 @@
+# ============================================================
+# Steam 게임 분석 프로젝트 - 서버(AWS Lightsail) override
+# ============================================================
+# 실행: docker compose -f docker-compose-local.yml -f docker-compose-server.yml up -d
+# 로컬 설정과 다른 점만 둠 (docs/aws_migration_plan.md 5절)
+# - 모든 상시 서비스 자동 재기동 (서버 재부팅·비정상 종료 대비)
+# - 분석 DB 복제본 미실행 (백업은 스냅샷·pg_dump)
+# - webserver 평소 미실행: 필요할 때 --profile ui 로 기동
+#   docker compose -f docker-compose-local.yml -f docker-compose-server.yml --profile ui up -d airflow-webserver
+# ============================================================
+
+services:
+  airflow-postgres:
+    restart: unless-stopped
+
+  analytics-postgres:
+    restart: unless-stopped
+
+  analytics-postgres-replica:
+    profiles: ["replica"]
+
+  seaweedfs:
+    restart: unless-stopped
+
+  kafka:
+    restart: unless-stopped
+
+  airflow-scheduler:
+    restart: unless-stopped
+
+  airflow-webserver:
+    profiles: ["ui"]
+    restart: unless-stopped
